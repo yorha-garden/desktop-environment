@@ -19,8 +19,14 @@ sketchybar --default label.font="Cascadia Code:Regular:11.0" \
 # 31x36 px (2x); scale 0.5 displays it at ~15.5x18 pt inside the 32 pt bar.
 # deploy.sh copies it here from assets/ — the repo path itself is under the
 # TCC-protected ~/Documents, which launchd services like sketchybar cannot read.
+# background.drawing=on is the MASTER gate: the image is a sub-layer of the
+# item background, and with the parent off the image silently never renders —
+# the item still reserves its width, so it looks like a mysterious gap.
+# background.color stays fully transparent so only the crest draws, no box.
 sketchybar --add item yorha_icon left \
-           --set yorha_icon background.image="$HOME/.config/sketchybar/yorha-icon.png" \
+           --set yorha_icon background.drawing=on \
+                            background.color=0x00000000 \
+                            background.image="$HOME/.config/sketchybar/yorha-icon.png" \
                             background.image.scale=0.5 \
                             background.image.drawing=on \
                             width=20 padding_left=6 padding_right=2
