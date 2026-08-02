@@ -3,9 +3,12 @@ BONE=0xffcac5b0
 INK=0xff4a4741
 ALERT=0xffbb3b36
 
+# Transparent bar: no fill, no border, so the items float directly on the
+# wallpaper. 0x00000000 is fully transparent (the alpha is the leading byte).
+# Contrast still holds — ink labels on the parchment wallpaper.
 # Bar starts above the screen edge and slides in at the end of this script.
 sketchybar --bar height=32 position=top padding_left=12 padding_right=12 \
-                 color=$BONE border_width=1 border_color=$INK y_offset=-36
+                 color=0x00000000 border_width=0 y_offset=-36
 
 sketchybar --default label.font="Cascadia Code:Regular:11.0" \
                      icon.font="Cascadia Code NF:Regular:12.0" \
