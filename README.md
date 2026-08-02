@@ -32,7 +32,7 @@ to see exactly what changed on the machine.
 | `bin/yorha-backup.sh` | Snapshots every path the install touches and emits a tested `restore.sh`. |
 | `bin/ubersicht-watchdog.sh` | Health-checks Übersicht every 60s and restarts it after 2 consecutive failures. Also starts it at login. |
 | `bin/make-wallpaper.sh` | Rasterizes `assets/wallpaper.svg` → `.png` and sets it as the desktop. Verifies the output dimensions; Chrome silently clamps oversized headless viewports. |
-| `widgets/yorha/*.jsx` | Übersicht desktop layer: HUD, Pod, reticle, scan beam, corner arcs (ported from the portfolio's CircleLine). |
+| `widgets/yorha/*.jsx` | Übersicht desktop layer: HUD, Pod, scan beam, corner ornaments (arcs + line trio, ported from the portfolio). |
 | `config/ghostty/` | Terminal config + the CRT shader. **Two** config files — see below. |
 | `config/sketchybar/` | Menu bar. Transparent — no fill, no border; items float on the wallpaper. |
 | `config/aerospace/` | Tiling config. Installed, `start-at-login = false`, currently not running by choice. |
@@ -156,8 +156,9 @@ window server, not with queries — half an hour was once spent "fixing" a bar t
 was never broken.
 
 **A widget with `refreshFrequency` but no `command` never re-renders.** Übersicht
-only creates the refresh timer for widgets that have a command, so `ring.jsx`
-exports a trivial `"true"` purely to get its hourly geometry re-read.
+only creates the refresh timer for widgets that have a command; a widget that
+needs periodic re-renders must export a trivial command (`"true"`) even if it
+ignores the output. (The since-removed reticle widget learned this the hard way.)
 
 **Übersicht renders once with `output: ""` before the command runs.** Any widget
 that mutates module state on that placeholder render will corrupt its first real
