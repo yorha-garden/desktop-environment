@@ -29,7 +29,7 @@ sketchybar --add item yorha_icon left \
                             background.image="$HOME/.config/sketchybar/yorha-icon.png" \
                             background.image.scale=0.5 \
                             background.image.drawing=on \
-                            width=20 padding_left=6 padding_right=2
+                            width=20 padding_left=6 padding_right=8
 
 sketchybar --add item yorha left \
            --set yorha label="YoRHa" label.font="Cascadia Code:Bold:11.0" padding_left=0
