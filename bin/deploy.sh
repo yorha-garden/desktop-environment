@@ -36,7 +36,11 @@ fi
 mkdir -p "$HOME/.config/sketchybar"
 cp "$REPO/config/sketchybar/sketchybarrc" "$HOME/.config/sketchybar/sketchybarrc"
 chmod +x "$HOME/.config/sketchybar/sketchybarrc"
-say "sketchybar -> ~/.config/sketchybar/"
+# The crest PNG must live outside the repo: sketchybar is a launchd service and
+# ~/Documents is TCC-protected — same constraint as the oracle below.
+[ -f "$REPO/assets/yorha-icon.png" ] && cp "$REPO/assets/yorha-icon.png" "$HOME/.config/sketchybar/yorha-icon.png"
+command -v sketchybar >/dev/null && sketchybar --reload >/dev/null 2>&1 || true
+say "sketchybar -> ~/.config/sketchybar/ (rc + crest, reloaded)"
 
 # --- aerospace (installed but intentionally not running) -------------------
 if [ -f "$REPO/config/aerospace/aerospace.toml" ]; then

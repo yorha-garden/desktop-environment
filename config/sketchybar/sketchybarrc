@@ -15,8 +15,18 @@ sketchybar --default label.font="Cascadia Code:Regular:11.0" \
                      label.color=$INK icon.color=$INK \
                      padding_left=6 padding_right=6
 
+# YoRHa crest, left of the wordmark. The PNG is pre-tinted to INK and rendered
+# 31x36 px (2x); scale 0.5 displays it at ~15.5x18 pt inside the 32 pt bar.
+# deploy.sh copies it here from assets/ — the repo path itself is under the
+# TCC-protected ~/Documents, which launchd services like sketchybar cannot read.
+sketchybar --add item yorha_icon left \
+           --set yorha_icon background.image="$HOME/.config/sketchybar/yorha-icon.png" \
+                            background.image.scale=0.5 \
+                            background.image.drawing=on \
+                            width=20 padding_left=6 padding_right=2
+
 sketchybar --add item yorha left \
-           --set yorha label="YoRHa" label.font="Cascadia Code:Bold:11.0"
+           --set yorha label="YoRHa" label.font="Cascadia Code:Bold:11.0" padding_left=0
 
 sketchybar --add item clock right \
            --set clock update_freq=10 script="sketchybar --set clock label=\"\$(date '+%H:%M')\""

@@ -39,6 +39,7 @@ to see exactly what changed on the machine.
 | `config/shell/` | Palette, zsh layer, Starship prompt, fastfetch, boot logo. |
 | `config/editor/` | VS Code–format colour theme. Install it yourself; nothing deploys into an editor. |
 | `assets/wallpaper.svg` | Wallpaper source. The PNG is generated and gitignored — regenerate with `bin/make-wallpaper.sh`. |
+| `assets/yorha-icon.svg` / `.png` | The YoRHa crest. The PNG is the ink-tinted 31×36 raster the bar uses; `deploy.sh` copies it to `~/.config/sketchybar/` because launchd services cannot read TCC-protected `~/Documents`. |
 | `launchd/` | Two agents: the oracle's 5-minute timer and the Übersicht watchdog. |
 | `docs/` | Architecture, palette, and the decision log. |
 
