@@ -33,14 +33,14 @@ sketchybar --default label.font="Cascadia Code:Regular:11.0" \
 # footprint to that number and IGNORES padding_left/right when placing the next
 # item — the wordmark once overlapped this box by 6pt while padding tweaks did
 # nothing. The spacing lives INSIDE the width: crest displays ~15.5pt wide,
-# centered, so width=26 = ~5pt of air each side. Adjust spacing via width only.
+# centered, so width=22 = ~3.2pt of air each side. Adjust spacing via width only.
 sketchybar --add item yorha_icon left \
            --set yorha_icon background.drawing=on \
                             background.color=0x00000000 \
                             background.image="$HOME/.config/sketchybar/yorha-icon.png" \
                             background.image.scale=0.5 \
                             background.image.drawing=on \
-                            width=26 padding_left=0 padding_right=0
+                            width=22 padding_left=0 padding_right=0
 
 sketchybar --add item yorha left \
            --set yorha label="YoRHa" label.font="Cascadia Code:Bold:11.0" padding_left=0
