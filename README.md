@@ -131,6 +131,19 @@ Pause it with `touch ~/.config/yorha/cache/watchdog.off`, resume by removing tha
 file. Without the flag, quitting Übersicht deliberately would just see it return
 within a minute.
 
+**`sketchybar --animate … --bar y_offset` silently no-ops after a reload.** The rc
+once parked the bar at `y_offset=-36` and relied on the entrance animation to slide
+it in; a reload dropped the animation and stranded the entire bar invisible
+off-screen. Visibility must never depend on an animation firing — the rc now ends
+with an unconditional `y_offset=0`, and the slide-in ceremony is scoped to first
+login via a `/tmp` sentinel.
+
+**SketchyBar's query telemetry is not a visibility oracle.** After reloads,
+`bounding_rects` comes back empty and `--query displays` returns `[]` even while
+the bar is rendering perfectly on screen. Verify visibility with eyes or the
+window server, not with queries — half an hour was once spent "fixing" a bar that
+was never broken.
+
 **A widget with `refreshFrequency` but no `command` never re-renders.** Übersicht
 only creates the refresh timer for widgets that have a command, so `ring.jsx`
 exports a trivial `"true"` purely to get its hourly geometry re-read.

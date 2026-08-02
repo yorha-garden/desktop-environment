@@ -6,9 +6,14 @@ ALERT=0xffbb3b36
 # Transparent bar: no fill, no border, so the items float directly on the
 # wallpaper. 0x00000000 is fully transparent (the alpha is the leading byte).
 # Contrast still holds — ink labels on the parchment wallpaper.
-# Bar starts above the screen edge and slides in at the end of this script.
+#
+# DO NOT park the bar off-screen here. The bar was once defined with
+# y_offset=-36, relying on the entrance animation at the end of this file to
+# slide it in — and `--animate ... --bar y_offset` silently no-ops after a
+# reload, which stranded the entire bar invisible off-screen. Visibility must
+# never depend on an animation firing.
 sketchybar --bar height=32 position=top padding_left=12 padding_right=12 \
-                 color=0x00000000 border_width=0 y_offset=-36
+                 color=0x00000000 border_width=0
 
 sketchybar --default label.font="Cascadia Code:Regular:11.0" \
                      icon.font="Cascadia Code NF:Regular:12.0" \
@@ -49,5 +54,16 @@ sketchybar --add item cpu right \
 
 sketchybar --update
 
-# entrance: slide the bar down into place (~0.5s sine ease)
-sketchybar --animate sin 30 --bar y_offset=0
+# Entrance: slide in from above, but ONLY on the first run after boot — /tmp is
+# cleared at boot, so the sentinel scopes the ceremony to login. On reloads the
+# bar simply appears in place; `--animate --bar` proved unreliable post-reload.
+# The unconditional y_offset=0 afterwards is the guarantee: even if the
+# animation is dropped entirely, the bar ends up on screen.
+ENTRY=/tmp/.yorha_bar_entered
+if [ ! -f "$ENTRY" ]; then
+  touch "$ENTRY"
+  sketchybar --bar y_offset=-36
+  sketchybar --animate sin 30 --bar y_offset=0
+  sleep 0.7
+fi
+sketchybar --bar y_offset=0
