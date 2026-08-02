@@ -32,7 +32,7 @@ to see exactly what changed on the machine.
 | `bin/yorha-backup.sh` | Snapshots every path the install touches and emits a tested `restore.sh`. |
 | `bin/ubersicht-watchdog.sh` | Health-checks Übersicht every 60s and restarts it after 2 consecutive failures. Also starts it at login. |
 | `bin/make-wallpaper.sh` | Rasterizes `assets/wallpaper.svg` → `.png` and sets it as the desktop. Verifies the output dimensions; Chrome silently clamps oversized headless viewports. |
-| `widgets/yorha/*.jsx` | Übersicht desktop layer: HUD, Pod, reticle, scan beam. |
+| `widgets/yorha/*.jsx` | Übersicht desktop layer: HUD, Pod, reticle, scan beam, corner arcs (ported from the portfolio's CircleLine). |
 | `config/ghostty/` | Terminal config + the CRT shader. **Two** config files — see below. |
 | `config/sketchybar/` | Menu bar. Transparent — no fill, no border; items float on the wallpaper. |
 | `config/aerospace/` | Tiling config. Installed, `start-at-login = false`, currently not running by choice. |
