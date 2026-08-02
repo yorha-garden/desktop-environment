@@ -10,6 +10,6 @@ cache/
 *.log
 
 # Large generated raster; regenerate with bin/make-wallpaper.sh from the SVG
-assets/wallpaper.png
+assets/wallpaper*.png
 
 .DS_Store

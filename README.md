@@ -138,6 +138,15 @@ off-screen. Visibility must never depend on an animation firing — the rc now e
 with an unconditional `y_offset=0`, and the slide-in ceremony is scoped to first
 login via a `/tmp` sentinel.
 
+**macOS caches the desktop picture BY PATH.** Rewriting the same filename and
+re-setting the same path is a silent no-op — the window server keeps serving the
+cached rendition, with no error anywhere, so wallpaper edits appear not to apply
+while being perfectly correct on disk. `make-wallpaper.sh` therefore writes
+`wallpaper-<sha>.png`, a content-derived name, and prunes superseded rasters.
+Even then the AppleScript set is not enough: on macOS 26 the wallpaper belongs to
+`WallpaperAgent`, which kept reporting an already-deleted path until it was
+restarted. The script now ends with `killall WallpaperAgent`.
+
 **The browser preview of Übersicht (127.0.0.1:41416) is not ground truth.** A
 second browser client can mount every widget container and render nothing into
 any of them — while the desktop webview is perfectly healthy. Twice this led to
