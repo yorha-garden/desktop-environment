@@ -71,6 +71,19 @@ launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null \
   && say "oracle   -> loaded (every 5 min)" \
   || say "oracle   -> plist written; load with: launchctl bootstrap gui/\$(id -u) $PLIST"
 
+# --- übersicht watchdog ----------------------------------------------------
+# Health-checking, not just liveness: the observed failure is the app staying
+# alive while its widget server dies. Also starts Übersicht at login.
+cp "$REPO/bin/ubersicht-watchdog.sh" "$HOME/.config/yorha/bin/ubersicht-watchdog.sh"
+chmod +x "$HOME/.config/yorha/bin/ubersicht-watchdog.sh"
+WPLIST="$HOME/Library/LaunchAgents/com.yorha.ubersicht-watchdog.plist"
+sed -e "s|REPO_PATH|$REPO|g" -e "s|HOME_PATH|$HOME|g" \
+    "$REPO/launchd/com.yorha.ubersicht-watchdog.plist" > "$WPLIST"
+launchctl bootout "gui/$(id -u)/com.yorha.ubersicht-watchdog" >/dev/null 2>&1 || true
+launchctl bootstrap "gui/$(id -u)" "$WPLIST" 2>/dev/null \
+  && say "watchdog -> loaded (health check every 60s, starts at login)" \
+  || say "watchdog -> plist written; load with: launchctl bootstrap gui/\$(id -u) $WPLIST"
+
 # --- refresh ---------------------------------------------------------------
 osascript -e 'tell application id "tracesOf.Uebersicht" to refresh' >/dev/null 2>&1 \
   && say "übersicht refreshed" || say "übersicht not running"

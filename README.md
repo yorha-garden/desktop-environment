@@ -117,7 +117,15 @@ matches nothing. Kill it by PID:
 `kill -9 $(pgrep -f "bersicht.app/Contents/MacOS" | head -1)`
 
 **Übersicht's server can die while the app stays alive.** No crash report; the
-desktop simply goes blank. Same fix as above, then relaunch.
+desktop simply goes blank. This is why `bin/ubersicht-watchdog.sh` exists — a plain
+`KeepAlive` would not help, because launchd sees a perfectly healthy app process.
+The watchdog checks health (server child present, listening, answering 200) every
+60s and restarts only after 2 consecutive failures. It also starts Übersicht at
+login, which is what makes the desktop layer survive a reboot.
+
+Pause it with `touch ~/.config/yorha/cache/watchdog.off`, resume by removing that
+file. Without the flag, quitting Übersicht deliberately would just see it return
+within a minute.
 
 **A widget with `refreshFrequency` but no `command` never re-renders.** Übersicht
 only creates the refresh timer for widgets that have a command, so `ring.jsx`
