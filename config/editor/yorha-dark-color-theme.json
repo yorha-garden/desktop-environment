@@ -1,0 +1,23 @@
+{
+  "name": "YoRHa Hacking Mode",
+  "type": "dark",
+  "colors": {
+    "editor.background": "#16161A",
+    "editor.foreground": "#D8D4C4",
+    "editorLineNumber.foreground": "#4A4741",
+    "editorCursor.foreground": "#BC9A5A",
+    "editor.selectionBackground": "#4A474180",
+    "sideBar.background": "#131317",
+    "activityBar.background": "#131317",
+    "statusBar.background": "#4A4741",
+    "statusBar.foreground": "#D8D4C4",
+    "titleBar.activeBackground": "#131317"
+  },
+  "tokenColors": [
+    { "scope": ["comment"], "settings": { "foreground": "#6E6B62", "fontStyle": "italic" } },
+    { "scope": ["string"], "settings": { "foreground": "#BC9A5A" } },
+    { "scope": ["keyword", "storage"], "settings": { "foreground": "#BB3B36" } },
+    { "scope": ["entity.name.function"], "settings": { "foreground": "#D8D4C4" } },
+    { "scope": ["constant.numeric"], "settings": { "foreground": "#A3A87E" } }
+  ]
+}
