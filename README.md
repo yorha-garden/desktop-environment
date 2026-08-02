@@ -138,6 +138,17 @@ off-screen. Visibility must never depend on an animation firing — the rc now e
 with an unconditional `y_offset=0`, and the slide-in ceremony is scoped to first
 login via a `/tmp` sentinel.
 
+**The browser preview of Übersicht (127.0.0.1:41416) is not ground truth.** A
+second browser client can mount every widget container and render nothing into
+any of them — while the desktop webview is perfectly healthy. Twice this led to
+debugging a "blank desktop" that was never blank. Verify on the desktop itself.
+
+**Widget CSS is document-global — namespace every class.** Übersicht injects all
+widget `<style>` blocks into one shared document. A generic `.tl { top:0 }` in
+the arcs widget overrode the HUD's `.tl { top:60px }` and yanked its left column
+to the screen edge; the earlier `.enter` collision was the same disease. Every
+class a widget defines gets a widget prefix, no exceptions.
+
 **SketchyBar's query telemetry is not a visibility oracle.** After reloads,
 `bounding_rects` comes back empty and `--query displays` returns `[]` even while
 the bar is rendering perfectly on screen. Verify visibility with eyes or the
