@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="5120" height="2880" viewBox="0 0 5120 2880">
+  <defs>
+    <pattern id="hex" width="120" height="208" patternUnits="userSpaceOnUse">
+      <path d="M60 0 L120 34 L120 104 L60 138 L0 104 L0 34 Z"
+            fill="none" stroke="#4A4741" stroke-opacity="0.075" stroke-width="1.5"/>
+    </pattern>
+    <radialGradient id="vig" cx="46%" cy="44%" r="76%">
+      <stop offset="58%" stop-color="#4A4741" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#4A4741" stop-opacity="0.17"/>
+    </radialGradient>
+    <filter id="grain">
+      <feTurbulence type="fractalNoise" baseFrequency="0.8" numOctaves="3" stitchTiles="stitch"/>
+      <feColorMatrix type="saturate" values="0"/>
+    </filter>
+  </defs>
+
+  <!-- parchment field -->
+  <rect width="5120" height="2880" fill="#CAC5B0"/>
+  <rect width="5120" height="2880" fill="url(#hex)"/>
+
+  <!-- deep background: two vast arcs sweeping in from the upper left -->
+  <circle cx="-260" cy="-180" r="1640" fill="none" stroke="#4A4741" stroke-opacity="0.07" stroke-width="2"/>
+  <circle cx="-260" cy="-180" r="1800" fill="none" stroke="#4A4741" stroke-opacity="0.05"
+          stroke-width="2" stroke-dasharray="3 21"/>
+
+  <!-- directional vector reaching toward the array -->
+  <circle cx="1150" cy="1720" r="7" fill="none" stroke="#4A4741" stroke-opacity="0.28" stroke-width="2"/>
+  <line x1="1172" y1="1714" x2="2840" y2="1338" stroke="#4A4741" stroke-opacity="0.2" stroke-width="2"/>
+
+  <!-- targeting array, right of centre -->
+  <g>
+    <circle cx="3440" cy="1260" r="200" fill="none" stroke="#4A4741" stroke-opacity="0.30" stroke-width="2"/>
+    <circle cx="3440" cy="1260" r="380" fill="none" stroke="#4A4741" stroke-opacity="0.22" stroke-width="2"/>
+    <circle cx="3440" cy="1260" r="580" fill="none" stroke="#4A4741" stroke-opacity="0.16" stroke-width="2"/>
+    <!-- instrument ring: dashes as tick marks -->
+    <circle cx="3440" cy="1260" r="780" fill="none" stroke="#4A4741" stroke-opacity="0.22"
+            stroke-width="3" stroke-dasharray="4 30"/>
+    <!-- one heavier arc segment on its own radius -->
+    <circle cx="3440" cy="1260" r="470" fill="none" stroke="#4A4741" stroke-opacity="0.18"
+            stroke-width="7" pathLength="100" stroke-dasharray="16 84"
+            transform="rotate(-28 3440 1260)"/>
+    <!-- cardinal ticks crossing the outer ring -->
+    <line x1="3440" y1="656" x2="3440" y2="704" stroke="#4A4741" stroke-opacity="0.35" stroke-width="2.5"/>
+    <line x1="3440" y1="1816" x2="3440" y2="1864" stroke="#4A4741" stroke-opacity="0.35" stroke-width="2.5"/>
+    <line x1="2836" y1="1260" x2="2884" y2="1260" stroke="#4A4741" stroke-opacity="0.35" stroke-width="2.5"/>
+    <line x1="3996" y1="1260" x2="4044" y2="1260" stroke="#4A4741" stroke-opacity="0.35" stroke-width="2.5"/>
+    <!-- axis stubs reaching outward -->
+    <line x1="2660" y1="1260" x2="2790" y2="1260" stroke="#4A4741" stroke-opacity="0.2" stroke-width="2"/>
+    <line x1="4090" y1="1260" x2="4220" y2="1260" stroke="#4A4741" stroke-opacity="0.2" stroke-width="2"/>
+    <!-- the mark -->
+    <circle cx="3440" cy="1260" r="16" fill="#BB3B36"/>
+    <circle cx="3440" cy="1260" r="54" fill="none" stroke="#BB3B36" stroke-opacity="0.5" stroke-width="2"/>
+    <circle cx="3440" cy="1260" r="102" fill="none" stroke="#BB3B36" stroke-opacity="0.16" stroke-width="2"/>
+    <!-- amber satellites on the rings -->
+    <circle cx="3751" cy="1041" r="9" fill="#BC9A5A"/>
+    <circle cx="2946" cy="1584" r="12" fill="none" stroke="#BC9A5A" stroke-opacity="0.85" stroke-width="2"/>
+    <circle cx="4013" cy="1663" r="7" fill="#BC9A5A" fill-opacity="0.7"/>
+  </g>
+
+  <!-- baseline rule, lower third -->
+  <line x1="340" y1="2140" x2="4780" y2="2140" stroke="#4A4741" stroke-opacity="0.35" stroke-width="2"/>
+  <line x1="340" y1="2131" x2="340" y2="2149" stroke="#4A4741" stroke-opacity="0.4" stroke-width="2"/>
+  <line x1="4780" y1="2131" x2="4780" y2="2149" stroke="#4A4741" stroke-opacity="0.4" stroke-width="2"/>
+  <circle cx="3440" cy="2140" r="7" fill="#BC9A5A"/>
+
+  <!-- sparse survey crosses, corners kept clear for the HUD -->
+  <g stroke="#4A4741" stroke-opacity="0.25" stroke-width="2">
+    <path d="M700 486 v28 M686 500 h28"/>
+    <path d="M1608 366 v28 M1594 380 h28"/>
+    <path d="M2486 686 v28 M2472 700 h28"/>
+    <path d="M1186 1486 v28 M1172 1500 h28"/>
+    <path d="M2086 1886 v28 M2072 1900 h28"/>
+    <path d="M886 2386 v28 M872 2400 h28"/>
+    <path d="M4286 586 v28 M4272 600 h28"/>
+    <path d="M4686 2386 v28 M4672 2400 h28"/>
+    <path d="M2886 286 v28 M2872 300 h28"/>
+  </g>
+  <!-- two hollow data markers -->
+  <rect x="1887" y="1137" width="26" height="26" fill="none" stroke="#4A4741" stroke-opacity="0.3" stroke-width="2"/>
+  <rect x="4487" y="1687" width="26" height="26" fill="none" stroke="#4A4741" stroke-opacity="0.3" stroke-width="2"/>
+
+  <!-- depth and texture -->
+  <rect width="5120" height="2880" fill="url(#vig)"/>
+  <rect width="5120" height="2880" filter="url(#grain)" opacity="0.085" style="mix-blend-mode:multiply"/>
+</svg>

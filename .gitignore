@@ -1,0 +1,15 @@
+# NEVER commit credentials. The Gemini key lives at
+# ~/.config/yorha/secrets/gemini.key (chmod 600), outside this repo entirely.
+secrets/
+*.key
+*.pem
+.env
+
+# Runtime caches — machine state, not source
+cache/
+*.log
+
+# Large generated raster; regenerate with bin/make-wallpaper.sh from the SVG
+assets/wallpaper.png
+
+.DS_Store

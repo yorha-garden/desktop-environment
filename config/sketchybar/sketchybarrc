@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+BONE=0xffcac5b0
+INK=0xff4a4741
+ALERT=0xffbb3b36
+
+# Bar starts above the screen edge and slides in at the end of this script.
+sketchybar --bar height=32 position=top padding_left=12 padding_right=12 \
+                 color=$BONE border_width=1 border_color=$INK y_offset=-36
+
+sketchybar --default label.font="Cascadia Code:Regular:11.0" \
+                     icon.font="Cascadia Code NF:Regular:12.0" \
+                     label.color=$INK icon.color=$INK \
+                     padding_left=6 padding_right=6
+
+sketchybar --add item yorha left \
+           --set yorha label="YoRHa" label.font="Cascadia Code:Bold:11.0"
+
+sketchybar --add item clock right \
+           --set clock update_freq=10 script="sketchybar --set clock label=\"\$(date '+%H:%M')\""
+
+sketchybar --add item cpu right \
+           --set cpu update_freq=15 \
+           script="sketchybar --set cpu label=\"CPU \$(ps -A -o %cpu | awk '{s+=\$1} END {printf \"%.0f\", s/8}')%\""
+
+sketchybar --update
+
+# entrance: slide the bar down into place (~0.5s sine ease)
+sketchybar --animate sin 30 --bar y_offset=0

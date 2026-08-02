@@ -1,0 +1,40 @@
+# YoRHa — hacking mode
+background = 16161A
+foreground = D8D4C4
+selection-background = 4A4741
+selection-foreground = D8D4C4
+cursor-color = BC9A5A
+
+palette = 0=#16161A
+palette = 1=#BB3B36
+palette = 2=#8A8F6B
+palette = 3=#BC9A5A
+palette = 4=#6E7B8B
+palette = 5=#8B6E7B
+palette = 6=#7B8B8A
+palette = 7=#D8D4C4
+palette = 8=#3A3A40
+palette = 9=#D4514B
+palette = 10=#A3A87E
+palette = 11=#D4B26E
+palette = 12=#8593A3
+palette = 13=#A38593
+palette = 14=#93A3A2
+palette = 15=#EFEBDB
+
+font-family = Cascadia Code
+font-feature = calt
+font-feature = liga
+font-size = 13
+
+background-opacity = 0.94
+background-blur = 20
+
+window-padding-x = 16
+window-padding-y = 14
+window-theme = dark
+cursor-style = block
+mouse-hide-while-typing = true
+
+custom-shader = /Users/aliceevr/.config/ghostty/shaders/crt.glsl
+custom-shader-animation = true

@@ -1,0 +1,55 @@
+<style>
+  body { margin:0; background:#CAC5B0; font-family:'Cascadia Code',monospace; color:#4A4741;
+         display:flex; gap:26px; padding:26px; align-items:flex-start; flex-wrap:wrap; }
+  .pod { width:300px; border:1px solid rgba(74,71,65,.45); background:rgba(214,210,193,.5);
+         padding:13px 15px; position:relative; }
+  .pod::before,.pod::after { content:''; position:absolute; width:8px; height:8px; border:1px solid #4A4741; }
+  .pod::before { top:-1px; left:-1px; border-right:0; border-bottom:0; }
+  .pod::after { bottom:-1px; right:-1px; border-left:0; border-top:0; }
+  .pod-hd { font-size:8px; letter-spacing:.3em; text-transform:uppercase; opacity:.6;
+            padding-bottom:7px; margin-bottom:8px; border-bottom:1px solid rgba(74,71,65,.3);
+            display:flex; justify-content:space-between; align-items:baseline; }
+  .pod-src { font-size:7px; letter-spacing:.18em; opacity:.55; }
+  .pod-src.live { color:#BC9A5A; opacity:.9; }
+  .pod-msg { font-size:11px; line-height:1.7; letter-spacing:.03em; overflow:hidden; max-width:100%; }
+  .pod-msg-inner { display:inline-block; white-space:nowrap; }
+  .lbl { font-size:9px; letter-spacing:.2em; text-transform:uppercase; opacity:.5; margin-bottom:6px; }
+  /* overshoot values computed by the widget: 63ch -> 127px, 72ch -> 188px */
+  @keyframes marq127 { 0%,18%{transform:translateX(0)} 82%,100%{transform:translateX(-127px)} }
+  @keyframes marq188 { 0%,18%{transform:translateX(0)} 82%,100%{transform:translateX(-188px)} }
+</style>
+
+<div>
+  <div class="lbl">Fits — 36 ch, no marquee</div>
+  <div class="pod">
+    <div class="pod-hd"><span>Pod 042 — Support Unit</span><span class="pod-src live">◂LINK</span></div>
+    <div class="pod-msg"><span class="pod-msg-inner">Status nominal. Uptime 4h. OK.</span></div>
+  </div>
+</div>
+
+<div>
+  <div class="lbl">Overflows — 63 ch, marquee 8.1s</div>
+  <div class="pod">
+    <div class="pod-hd"><span>Pod 042 — Support Unit</span><span class="pod-src live">◂LINK</span></div>
+    <div class="pod-msg"><span class="pod-msg-inner"
+      style="animation:marq127 8.1s ease-in-out 0s infinite alternate">CPU utilization at twenty-four percent reflects minimal effort.</span></div>
+  </div>
+</div>
+
+<div>
+  <div class="lbl">Longest — 71 ch, marquee 10.4s</div>
+  <div class="pod">
+    <div class="pod-hd"><span>Pod 042 — Support Unit</span><span class="pod-src live">◂LINK</span></div>
+    <div class="pod-msg"><span class="pod-msg-inner"
+      style="animation:marq188 10.4s ease-in-out 0s infinite alternate">Observation: Operator heart rate variability indicates fatigue.</span></div>
+  </div>
+</div>
+
+<div>
+  <div class="lbl">Offline fallback — LOCAL</div>
+  <div class="pod">
+    <div class="pod-hd"><span>Pod 042 — Support Unit</span><span class="pod-src">LOCAL</span></div>
+    <div class="pod-msg"><span class="pod-msg-inner"
+      style="animation:marq127 8.1s ease-in-out 0s infinite alternate">Analysis: operator condition stable. Recommendation: hydrate.</span></div>
+  </div>
+</div>

@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.yorha.pod-oracle</string>
+
+  <!-- The script is run from ~/.config/yorha/bin, NOT from the repo. launchd-spawned
+       processes have no TCC access to ~/Documents, so running it from the repo fails
+       with "Operation not permitted" on every fire. deploy.sh copies it out. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/python3</string>
+    <string>HOME_PATH/.config/yorha/bin/pod-oracle.py</string>
+  </array>
+
+  <!-- Every 5 minutes. RunAtLoad primes the cache immediately on login so the
+       Pod is live rather than waiting out the first interval. -->
+  <key>StartInterval</key>
+  <integer>300</integer>
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- Deliberately NOT KeepAlive: this is a short-lived task, not a daemon.
+       KeepAlive would respawn it in a tight loop the moment it exits. -->
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>LowPriorityIO</key>
+  <true/>
+  <key>Nice</key>
+  <integer>5</integer>
+
+  <key>StandardErrorPath</key>
+  <string>HOME_PATH/.config/yorha/cache/pod-oracle.stderr.log</string>
+</dict>
+</plist>

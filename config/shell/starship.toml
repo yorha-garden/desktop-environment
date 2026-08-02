@@ -1,0 +1,25 @@
+add_newline = true
+# The second line MUST be $character, not a hardcoded glyph. Hardcoding it made the
+# [character] table below dead config: the prompt was byte-identical after a failed
+# command, so error_symbol could never render.
+format = """[](#4A4741)$directory[](fg:#4A4741 bg:#3A3A40)$git_branch$git_status[](#3A3A40)
+$character"""
+
+[directory]
+style = "bg:#4A4741 fg:#D8D4C4"
+format = "[ $path ]($style)"
+truncation_length = 3
+truncation_symbol = "…/"
+
+[git_branch]
+symbol = " "
+style = "bg:#3A3A40 fg:#BC9A5A"
+format = "[ $symbol$branch ]($style)"
+
+[git_status]
+style = "bg:#3A3A40 fg:#BB3B36"
+format = "[$all_status$ahead_behind ]($style)"
+
+[character]
+success_symbol = "[›](bold #BC9A5A)"
+error_symbol = "[›](bold #BB3B36)"

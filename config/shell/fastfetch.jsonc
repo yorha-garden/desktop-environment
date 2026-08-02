@@ -1,0 +1,13 @@
+{
+  "logo": { "source": "~/.config/yorha/logo.txt", "type": "file", "padding": { "top": 1, "right": 4 } },
+  "display": { "separator": "  " },
+  "modules": [
+    { "type": "custom", "format": "[38;5;179m//////// SYSTEM READOUT ////////[0m" },
+    { "type": "os",     "key": "HOST  " },
+    { "type": "kernel", "key": "KERNEL" },
+    { "type": "uptime", "key": "UPTIME" },
+    { "type": "memory", "key": "MEMORY" },
+    { "type": "shell",  "key": "SHELL " },
+    { "type": "terminal", "key": "TERM  " }
+  ]
+}
