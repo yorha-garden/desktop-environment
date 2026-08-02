@@ -30,13 +30,16 @@ to see exactly what changed on the machine.
 | `bin/pod-oracle.py` | Generates Pod messages via Gemini. Runs on a timer, never from the widget. |
 | `bin/deploy.sh` / `capture.sh` | Sync in each direction. |
 | `bin/yorha-backup.sh` | Snapshots every path the install touches and emits a tested `restore.sh`. |
+| `bin/ubersicht-watchdog.sh` | Health-checks Übersicht every 60s and restarts it after 2 consecutive failures. Also starts it at login. |
+| `bin/make-wallpaper.sh` | Rasterizes `assets/wallpaper.svg` → `.png` and sets it as the desktop. Verifies the output dimensions; Chrome silently clamps oversized headless viewports. |
 | `widgets/yorha/*.jsx` | Übersicht desktop layer: HUD, Pod, reticle, scan beam. |
 | `config/ghostty/` | Terminal config + the CRT shader. **Two** config files — see below. |
-| `config/sketchybar/` | Menu bar. |
+| `config/sketchybar/` | Menu bar. Transparent — no fill, no border; items float on the wallpaper. |
 | `config/aerospace/` | Tiling config. Installed, `start-at-login = false`, currently not running by choice. |
 | `config/shell/` | Palette, zsh layer, Starship prompt, fastfetch, boot logo. |
-| `assets/wallpaper.svg` | Wallpaper source. The PNG is generated and gitignored. |
-| `launchd/` | The oracle's 5-minute timer. |
+| `config/editor/` | VS Code–format colour theme. Install it yourself; nothing deploys into an editor. |
+| `assets/wallpaper.svg` | Wallpaper source. The PNG is generated and gitignored — regenerate with `bin/make-wallpaper.sh`. |
+| `launchd/` | Two agents: the oracle's 5-minute timer and the Übersicht watchdog. |
 | `docs/` | Architecture, palette, and the decision log. |
 
 ---
