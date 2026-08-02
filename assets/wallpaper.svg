@@ -18,23 +18,6 @@
   <rect width="5120" height="2880" fill="#CAC5B0"/>
   <rect width="5120" height="2880" fill="url(#hex)"/>
 
-  <!-- baseline rule, lower third -->
-  <line x1="340" y1="2140" x2="4780" y2="2140" stroke="#4A4741" stroke-opacity="0.35" stroke-width="2"/>
-  <line x1="340" y1="2131" x2="340" y2="2149" stroke="#4A4741" stroke-opacity="0.4" stroke-width="2"/>
-  <line x1="4780" y1="2131" x2="4780" y2="2149" stroke="#4A4741" stroke-opacity="0.4" stroke-width="2"/>
-
-  <!-- sparse survey crosses, corners kept clear for the HUD -->
-  <g stroke="#4A4741" stroke-opacity="0.25" stroke-width="2">
-    <path d="M700 486 v28 M686 500 h28"/>
-    <path d="M1608 366 v28 M1594 380 h28"/>
-    <path d="M2486 686 v28 M2472 700 h28"/>
-    <path d="M1186 1486 v28 M1172 1500 h28"/>
-    <path d="M2086 1886 v28 M2072 1900 h28"/>
-    <path d="M886 2386 v28 M872 2400 h28"/>
-    <path d="M4286 586 v28 M4272 600 h28"/>
-    <path d="M4686 2386 v28 M4672 2400 h28"/>
-    <path d="M2886 286 v28 M2872 300 h28"/>
-  </g>
 
   <!-- depth and texture -->
   <rect width="5120" height="2880" fill="url(#vig)"/>
