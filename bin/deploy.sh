@@ -57,15 +57,15 @@ PRIOR_INT_TRAP="$(trap -p INT)"
 PRIOR_TERM_TRAP="$(trap -p TERM)"
 
 extract_appearance_trap_handler() {
-  local definition="$1"
-  local captured=""
+  local YORHA_APPEARANCE_EXTRACT_DEFINITION="$1"
+  local YORHA_APPEARANCE_EXTRACT_CAPTURED=""
   trap() {
     [ "$1" != -- ] || shift
-    captured="$1"
+    YORHA_APPEARANCE_EXTRACT_CAPTURED="$1"
   }
-  eval "$definition"
+  eval "$YORHA_APPEARANCE_EXTRACT_DEFINITION"
   unset -f trap
-  printf '%s' "$captured"
+  printf '%s' "$YORHA_APPEARANCE_EXTRACT_CAPTURED"
 }
 
 PRIOR_EXIT_HANDLER="$(extract_appearance_trap_handler "$PRIOR_EXIT_TRAP")"
@@ -74,19 +74,20 @@ PRIOR_INT_HANDLER="$(extract_appearance_trap_handler "$PRIOR_INT_TRAP")"
 PRIOR_TERM_HANDLER="$(extract_appearance_trap_handler "$PRIOR_TERM_TRAP")"
 
 cleanup_appearance_temps() {
-  local yorha_appearance_pending
-  for yorha_appearance_pending in "$INSTALL_TMP" "$WATCHER_TMP" "$PLIST_TMP"; do
-    [ -z "$yorha_appearance_pending" ] || rm -f -- "$yorha_appearance_pending"
+  local YORHA_APPEARANCE_CLEANUP_PENDING
+  for YORHA_APPEARANCE_CLEANUP_PENDING in "$INSTALL_TMP" "$WATCHER_TMP" "$PLIST_TMP"; do
+    [ -z "$YORHA_APPEARANCE_CLEANUP_PENDING" ] \
+      || rm -f -- "$YORHA_APPEARANCE_CLEANUP_PENDING"
   done
 }
 
 restore_appearance_trap() {
-  local definition="$1"
-  local signal_name="$2"
-  if [ -n "$definition" ]; then
-    eval "$definition"
+  local YORHA_APPEARANCE_RESTORE_DEFINITION="$1"
+  local YORHA_APPEARANCE_RESTORE_SIGNAL_NAME="$2"
+  if [ -n "$YORHA_APPEARANCE_RESTORE_DEFINITION" ]; then
+    eval "$YORHA_APPEARANCE_RESTORE_DEFINITION"
   else
-    trap - "$signal_name"
+    trap - "$YORHA_APPEARANCE_RESTORE_SIGNAL_NAME"
   fi
 }
 
@@ -135,18 +136,18 @@ trap 'YORHA_APPEARANCE_SIGNAL_CONTEXT_STATUS=$?; prepare_appearance_signal INT 1
 trap 'YORHA_APPEARANCE_SIGNAL_CONTEXT_STATUS=$?; prepare_appearance_signal TERM 143; if [ -n "$YORHA_APPEARANCE_PRIOR_SIGNAL_DEFINITION" ]; then if [ -n "$YORHA_APPEARANCE_PRIOR_SIGNAL_HANDLER" ]; then YORHA_APPEARANCE_DISPATCH_STATUS="$YORHA_APPEARANCE_SIGNAL_CONTEXT_STATUS"; yorha_appearance_return_dispatch_status || eval "$YORHA_APPEARANCE_PRIOR_SIGNAL_HANDLER"; fi; exit "$YORHA_APPEARANCE_SIGNAL_EXIT_STATUS"; fi; kill -s "$YORHA_APPEARANCE_SIGNAL_NAME" "$$"; exit "$YORHA_APPEARANCE_SIGNAL_EXIT_STATUS"' TERM
 
 install_atomic() {
-  local yorha_appearance_source
-  local yorha_appearance_destination
-  local yorha_appearance_temporary
-  yorha_appearance_source="$1"
-  yorha_appearance_destination="$2"
-  yorha_appearance_temporary="${yorha_appearance_destination}.tmp.$$"
-  INSTALL_TMP="$yorha_appearance_temporary"
-  cp "$yorha_appearance_source" "$yorha_appearance_temporary"
+  local YORHA_APPEARANCE_INSTALL_SOURCE
+  local YORHA_APPEARANCE_INSTALL_DESTINATION
+  local YORHA_APPEARANCE_INSTALL_TEMPORARY
+  YORHA_APPEARANCE_INSTALL_SOURCE="$1"
+  YORHA_APPEARANCE_INSTALL_DESTINATION="$2"
+  YORHA_APPEARANCE_INSTALL_TEMPORARY="${YORHA_APPEARANCE_INSTALL_DESTINATION}.tmp.$$"
+  INSTALL_TMP="$YORHA_APPEARANCE_INSTALL_TEMPORARY"
+  cp "$YORHA_APPEARANCE_INSTALL_SOURCE" "$YORHA_APPEARANCE_INSTALL_TEMPORARY"
   if [ "${3:-}" = executable ]; then
-    chmod +x "$yorha_appearance_temporary"
+    chmod +x "$YORHA_APPEARANCE_INSTALL_TEMPORARY"
   fi
-  mv "$yorha_appearance_temporary" "$yorha_appearance_destination"
+  mv "$YORHA_APPEARANCE_INSTALL_TEMPORARY" "$YORHA_APPEARANCE_INSTALL_DESTINATION"
   INSTALL_TMP=""
 }
 

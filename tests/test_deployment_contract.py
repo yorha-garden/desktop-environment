@@ -29,10 +29,13 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertIsNotNone(helper)
         body = helper.group("body")
         self.assertIn(
-            'yorha_appearance_temporary="${yorha_appearance_destination}.tmp.$$"', body)
+            'YORHA_APPEARANCE_INSTALL_TEMPORARY='
+            '"${YORHA_APPEARANCE_INSTALL_DESTINATION}.tmp.$$"', body)
         self.assertLess(
-            body.index('cp "$yorha_appearance_source" "$yorha_appearance_temporary"'),
-            body.index('mv "$yorha_appearance_temporary" "$yorha_appearance_destination"'))
+            body.index('cp "$YORHA_APPEARANCE_INSTALL_SOURCE" '
+                       '"$YORHA_APPEARANCE_INSTALL_TEMPORARY"'),
+            body.index('mv "$YORHA_APPEARANCE_INSTALL_TEMPORARY" '
+                       '"$YORHA_APPEARANCE_INSTALL_DESTINATION"'))
         for call in (
             'install_atomic "$REPO/assets/yorha-system.heic" "$RUNTIME_WALLPAPER"',
             'install_atomic "$REPO/assets/yorha-icon-light.png" "$APPEARANCE/yorha-icon-light.png"',
@@ -56,9 +59,9 @@ class DeploymentContractTests(unittest.TestCase):
         helper = re.search(r"install_atomic\(\) \{(?P<body>.*?)\n\}", block, re.S)
         self.assertIsNotNone(helper)
         body = helper.group("body")
-        self.assertLess(body.index('chmod +x "$yorha_appearance_temporary"'),
-                        body.index('mv "$yorha_appearance_temporary" '
-                                   '"$yorha_appearance_destination"'))
+        self.assertLess(body.index('chmod +x "$YORHA_APPEARANCE_INSTALL_TEMPORARY"'),
+                        body.index('mv "$YORHA_APPEARANCE_INSTALL_TEMPORARY" '
+                                   '"$YORHA_APPEARANCE_INSTALL_DESTINATION"'))
         self.assertIn('install_atomic "$REPO/bin/apply-appearance.sh" '
                       '"$RUNTIME_COORDINATOR" executable', block)
         self.assertRegex(block, r'swiftc -O .*appearance-watcher\.swift" -o "\$WATCHER_TMP"')
@@ -142,6 +145,9 @@ class DeploymentSandboxTests(unittest.TestCase):
             "TEST_REPO": str(ROOT),
             "YORHA_PLUTIL": str(self.fake_bin / "plutil"),
             "YORHA_SIGNAL_READY": str(self.base / "signal-ready"),
+            "YORHA_EXTRACT_READY": str(self.base / "extract-ready"),
+            "YORHA_RESTORE_READY": str(self.base / "restore-ready"),
+            "YORHA_HANDLER_READY": str(self.base / "handler-ready"),
             "YORHA_TRAP_LOG": str(self.base / "trap.log"),
         })
         self.write_stub("cp", r'''#!/bin/bash
@@ -252,12 +258,87 @@ printf 'after-block\n' >> "$YORHA_TRAP_LOG"
 set -euo pipefail
 REPO="$TEST_REPO"
 say() { printf '  %s\n' "$*"; }
+definition=outer-definition
+captured=outer-captured
+signal_name=outer-signal-name
 pending=outer-pending
 source=outer-source
 destination=outer-destination
 temporary=outer-temporary
-trap 'printf "prior-exit:%s:%s:%s:%s:%s\n" "$?" "$pending" "$source" "$destination" "$temporary" >> "$YORHA_TRAP_LOG"' EXIT
+yorha_appearance_pending=outer-yorha-pending
+yorha_appearance_source=outer-yorha-source
+yorha_appearance_destination=outer-yorha-destination
+yorha_appearance_temporary=outer-yorha-temporary
+trap 'printf "prior-exit:%s:%s:%s:%s:%s:%s:%s:%s\n" "$?" "$definition" "$captured" "$signal_name" "$yorha_appearance_pending" "$yorha_appearance_source" "$yorha_appearance_destination" "$yorha_appearance_temporary" >> "$YORHA_TRAP_LOG"' EXIT
 ''' + self.block)
+        path.chmod(0o755)
+        return path
+
+    def make_extract_scope_signal_script(self):
+        path = self.base / "appearance-runtime-extract-scope-signal.sh"
+        path.write_text(r'''#!/usr/bin/env bash
+set -euo pipefail
+REPO="$TEST_REPO"
+say() { printf '  %s\n' "$*"; }
+definition=outer-definition
+captured=outer-captured
+signal_name=outer-signal-name
+yorha_appearance_pending=outer-yorha-pending
+yorha_appearance_source=outer-yorha-source
+yorha_appearance_destination=outer-yorha-destination
+yorha_appearance_temporary=outer-yorha-temporary
+trap 'printf "prior-term:%s:%s:%s:%s:%s:%s:%s\n" "$definition" "$captured" "$signal_name" "$yorha_appearance_pending" "$yorha_appearance_source" "$yorha_appearance_destination" "$yorha_appearance_temporary" >> "$YORHA_TRAP_LOG"; builtin trap - TERM; builtin kill -s TERM "$$"' TERM
+''' + self.block + r'''
+YORHA_TEST_NONEMPTY_EVAL_COUNT=0
+eval() {
+  if [ -n "${1:-}" ]; then
+    YORHA_TEST_NONEMPTY_EVAL_COUNT=$((YORHA_TEST_NONEMPTY_EVAL_COUNT + 1))
+  fi
+  builtin eval "$@"
+  if [ "$YORHA_TEST_NONEMPTY_EVAL_COUNT" -eq 1 ]; then
+    YORHA_TEST_NONEMPTY_EVAL_COUNT=2
+    : > "$YORHA_EXTRACT_READY"
+    while :; do sleep 1; done
+  fi
+}
+YORHA_TEST_TERM_DEFINITION="$(trap -p TERM)"
+extract_appearance_trap_handler "$YORHA_TEST_TERM_DEFINITION" >/dev/null
+printf 'after-block\n' >> "$YORHA_TRAP_LOG"
+''')
+        path.chmod(0o755)
+        return path
+
+    def make_restore_scope_signal_script(self):
+        path = self.base / "appearance-runtime-restore-scope-signal.sh"
+        path.write_text(r'''#!/usr/bin/env bash
+set -euo pipefail
+REPO="$TEST_REPO"
+say() { printf '  %s\n' "$*"; }
+definition=outer-definition
+captured=outer-captured
+signal_name=outer-signal-name
+yorha_appearance_pending=outer-yorha-pending
+yorha_appearance_source=outer-yorha-source
+yorha_appearance_destination=outer-yorha-destination
+yorha_appearance_temporary=outer-yorha-temporary
+trap 'printf "prior-term:%s:%s:%s:%s:%s:%s:%s\n" "$definition" "$captured" "$signal_name" "$yorha_appearance_pending" "$yorha_appearance_source" "$yorha_appearance_destination" "$yorha_appearance_temporary" >> "$YORHA_TRAP_LOG"; builtin trap - TERM; : > "$YORHA_HANDLER_READY"; while :; do sleep 1; done' TERM
+YORHA_TEST_TERM_EVAL_COUNT=0
+eval() {
+  case "${1:-}" in
+    *' SIGTERM')
+      YORHA_TEST_TERM_EVAL_COUNT=$((YORHA_TEST_TERM_EVAL_COUNT + 1))
+      ;;
+  esac
+  builtin eval "$@"
+  if [ "$YORHA_TEST_TERM_EVAL_COUNT" -eq 1 ] && [ -n "$WATCHER_TMP" ]; then
+    YORHA_TEST_TERM_EVAL_COUNT=2
+    : > "$YORHA_RESTORE_READY"
+    while :; do sleep 1; done
+  fi
+}
+''' + self.block + r'''
+printf 'after-block\n' >> "$YORHA_TRAP_LOG"
+''')
         path.chmod(0o755)
         return path
 
@@ -290,6 +371,59 @@ printf 'after-block\n' >> "$YORHA_TRAP_LOG"
             time.sleep(0.02)
         self.assertTrue(ready.exists(), "sandbox did not reach watcher compilation")
         os.killpg(process.pid, signum)
+        process.communicate(timeout=5)
+        lines = trap_log.read_text().splitlines() if trap_log.exists() else []
+        return process.returncode, lines
+
+    def signal_block_during_extract(self, script, signum):
+        ready = Path(self.env["YORHA_EXTRACT_READY"])
+        trap_log = Path(self.env["YORHA_TRAP_LOG"])
+        ready.unlink(missing_ok=True)
+        trap_log.unlink(missing_ok=True)
+        process = subprocess.Popen(
+            ["/bin/bash", str(script)], cwd=ROOT, env=self.env, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+        deadline = time.monotonic() + 5
+        while not ready.exists() and process.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.02)
+        self.assertTrue(ready.exists(), "sandbox did not reach trap extraction")
+        os.killpg(process.pid, signum)
+        process.communicate(timeout=5)
+        lines = trap_log.read_text().splitlines() if trap_log.exists() else []
+        return process.returncode, lines
+
+    def signal_block_during_restore(self, script, entry_signum, restored_signum):
+        signal_ready = Path(self.env["YORHA_SIGNAL_READY"])
+        restore_ready = Path(self.env["YORHA_RESTORE_READY"])
+        handler_ready = Path(self.env["YORHA_HANDLER_READY"])
+        trap_log = Path(self.env["YORHA_TRAP_LOG"])
+        signal_ready.unlink(missing_ok=True)
+        restore_ready.unlink(missing_ok=True)
+        handler_ready.unlink(missing_ok=True)
+        trap_log.unlink(missing_ok=True)
+        env = self.env.copy()
+        env["YORHA_DEPLOY_FAIL"] = "signal"
+        process = subprocess.Popen(
+            ["/bin/bash", str(script)], cwd=ROOT, env=env, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+        deadline = time.monotonic() + 5
+        while (not signal_ready.exists() and process.poll() is None
+               and time.monotonic() < deadline):
+            time.sleep(0.02)
+        self.assertTrue(signal_ready.exists(), "sandbox did not reach watcher compilation")
+        os.killpg(process.pid, entry_signum)
+        deadline = time.monotonic() + 5
+        while (not restore_ready.exists() and process.poll() is None
+               and time.monotonic() < deadline):
+            time.sleep(0.02)
+        self.assertTrue(restore_ready.exists(), "sandbox did not reach trap restoration")
+        os.killpg(process.pid, restored_signum)
+        deadline = time.monotonic() + 5
+        while (not handler_ready.exists() and process.poll() is None
+               and time.monotonic() < deadline):
+            time.sleep(0.02)
+        self.assertTrue(handler_ready.exists(), "sandbox did not reach prior trap handler")
+        os.killpg(process.pid, restored_signum)
         process.communicate(timeout=5)
         lines = trap_log.read_text().splitlines() if trap_log.exists() else []
         return process.returncode, lines
@@ -363,8 +497,34 @@ printf 'after-block\n' >> "$YORHA_TRAP_LOG"
         self.assertEqual(result.returncode, 91, result.stderr)
         trap_log = Path(self.env["YORHA_TRAP_LOG"])
         self.assertEqual(trap_log.read_text().splitlines(), [
-            "prior-exit:91:outer-pending:outer-source:outer-destination:outer-temporary",
+            "prior-exit:91:outer-definition:outer-captured:outer-signal-name:"
+            "outer-yorha-pending:outer-yorha-source:outer-yorha-destination:"
+            "outer-yorha-temporary",
         ])
+        self.assertEqual(self.pending_temps(), [])
+
+    def test_signal_during_trap_extraction_preserves_outer_helper_variables(self):
+        returncode, lines = self.signal_block_during_extract(
+            self.make_extract_scope_signal_script(), signal.SIGTERM)
+        self.assertEqual(returncode, -signal.SIGTERM)
+        self.assertEqual(lines, [
+            "prior-term:outer-definition:outer-captured:outer-signal-name:"
+            "outer-yorha-pending:outer-yorha-source:outer-yorha-destination:"
+            "outer-yorha-temporary",
+        ])
+        self.assertNotIn("after-block", lines)
+        self.assertEqual(self.pending_temps(), [])
+
+    def test_signal_during_trap_restore_preserves_outer_helper_variables(self):
+        returncode, lines = self.signal_block_during_restore(
+            self.make_restore_scope_signal_script(), signal.SIGHUP, signal.SIGTERM)
+        self.assertEqual(returncode, -signal.SIGTERM)
+        self.assertEqual(lines, [
+            "prior-term:outer-definition:outer-captured:outer-signal-name:"
+            "outer-yorha-pending:outer-yorha-source:outer-yorha-destination:"
+            "outer-yorha-temporary",
+        ])
+        self.assertNotIn("after-block", lines)
         self.assertEqual(self.pending_temps(), [])
 
     def test_signal_cleans_then_dispatches_prior_handler_and_stops(self):
