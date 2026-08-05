@@ -737,51 +737,56 @@ Expected: stage only appearance-related hunks. The user's minute-boundary hunks 
 - Modify: `docs/DECISIONS.md`
 - Modify: `tests/test_deployment_contract.py`
 
-**Interfaces:** Restore label `com.yorha.appearance-watcher`; explicit removal targets are the watcher binary, coordinator, `~/.config/yorha/appearance` (copied HEIC, crests, lock, and successful-mode marker), and appearance log. Restore returns the pre-install wallpaper through the existing backup mechanism.
+**Interfaces:** Snapshot stores the original `com.yorha.appearance-watcher.plist` bytes when present and records whether `gui/$(id -u)/com.yorha.appearance-watcher` was loaded. Restore boots out the deployed job, reinstates and re-bootstraps the original plist only when it was previously present and loaded, or removes the feature-created plist otherwise. Explicit removal targets are the watcher binary, coordinator, `~/.config/yorha/appearance` (copied HEIC, crests, lock, and successful-mode marker), and appearance log; the recorded wallpaper is restored through argv-bound AppleScript.
 
 - [ ] **Step 1: Add failing restore/docs tests**
 
-Extend the imports in `tests/test_deployment_contract.py` with `os`, `subprocess`, and `tempfile`, then append this sandboxed test. It runs the backup generator and generated restore script under a temporary `HOME`; every external command that could touch the real session is replaced by a command double:
+Extend the imports in `tests/test_deployment_contract.py` with `os`, `subprocess`, and `tempfile`, then append this complete second `unittest.TestCase`. Do not place these functions at module scope: `write_double`, `test_generated_restore_cleans_appearance_runtime_in_sandbox`, and `test_docs_state_boundary` must have the four-space indentation shown beneath `RestoreContractTests` so `python3 -m unittest` discovers both tests. The sandbox runs the backup generator and generated restore under a temporary `HOME`; every external command that could touch the real session is replaced by a command double:
 
 ```python
-def write_double(self, directory, name, body):
-    path = directory / name
-    path.write_text("#!/bin/sh\n" + body)
-    path.chmod(0o755)
-    return path
+class RestoreContractTests(unittest.TestCase):
+    def write_double(self, directory, name, body):
+        path = directory / name
+        path.write_text("#!/bin/sh\n" + body)
+        path.chmod(0o755)
+        return path
 
-def test_generated_restore_cleans_appearance_runtime_in_sandbox(self):
-    with tempfile.TemporaryDirectory() as raw:
-        sandbox = Path(raw)
-        home = sandbox / "home"
-        fakebin = sandbox / "bin"
-        home.mkdir(); fakebin.mkdir()
-        (home / ".zshrc").write_text("baseline\n")
+    def test_generated_restore_cleans_appearance_runtime_in_sandbox(self):
+        with tempfile.TemporaryDirectory() as raw:
+            sandbox = Path(raw)
+            home = sandbox / "home"
+            fakebin = sandbox / "bin"
+            home.mkdir(); fakebin.mkdir()
+            (home / ".zshrc").write_text("baseline\n")
 
-        # Make ~/.config/yorha and the watcher plist pre-existing. Restore must
-        # preserve both while removing only the appearance feature's additions.
-        yorha = home / ".config/yorha"
-        yorha.mkdir(parents=True)
-        (yorha / "keep.txt").write_text("pre-existing\n")
-        agents = home / "Library/LaunchAgents"
-        agents.mkdir(parents=True)
-        plist = agents / "com.yorha.appearance-watcher.plist"
-        plist.write_text("pre-existing plist\n")
+            yorha = home / ".config/yorha"
+            yorha.mkdir(parents=True)
+            (yorha / "keep.txt").write_text("pre-existing\n")
+            agents = home / "Library/LaunchAgents"
+            agents.mkdir(parents=True)
+            plist = agents / "com.yorha.appearance-watcher.plist"
+            original_plist = b"pre-existing plist bytes\n"
+            plist.write_bytes(original_plist)
 
-        recorded_wallpaper = sandbox / "recorded.heic"
-        recorded_wallpaper.write_bytes(b"baseline wallpaper")
-        wallpaper_state = sandbox / "wallpaper-state"
-        launchctl_log = sandbox / "launchctl-log"
-        env = os.environ.copy()
-        env.update({
-            "HOME": str(home),
-            "PATH": f"{fakebin}:/usr/bin:/bin",
-            "YORHA_TEST_RECORDED_WALLPAPER": str(recorded_wallpaper),
-            "YORHA_TEST_WALLPAPER_STATE": str(wallpaper_state),
-            "YORHA_TEST_LAUNCHCTL_LOG": str(launchctl_log),
-        })
+            # The snapshot sees an already-loaded pre-existing job. The fake
+            # launchctl mutates this file for bootout/bootstrap state changes.
+            job_state = sandbox / "appearance-job-loaded"
+            job_state.write_text("loaded\n")
+            recorded_wallpaper = sandbox / "recorded.heic"
+            recorded_wallpaper.write_bytes(b"baseline wallpaper")
+            wallpaper_state = sandbox / "wallpaper-state"
+            launchctl_log = sandbox / "launchctl-log"
+            env = os.environ.copy()
+            env.update({
+                "HOME": str(home),
+                "PATH": f"{fakebin}:/usr/bin:/bin",
+                "YORHA_TEST_RECORDED_WALLPAPER": str(recorded_wallpaper),
+                "YORHA_TEST_WALLPAPER_STATE": str(wallpaper_state),
+                "YORHA_TEST_LAUNCHCTL_LOG": str(launchctl_log),
+                "YORHA_TEST_JOB_STATE": str(job_state),
+            })
 
-        self.write_double(fakebin, "osascript", r'''
+            self.write_double(fakebin, "osascript", r'''
 if [ "$1" = "-e" ]; then
   case "$2" in
     *"get picture of current desktop"*)
@@ -792,79 +797,126 @@ elif [ "$1" = "-" ]; then
 fi
 exit 0
 ''')
-        self.write_double(fakebin, "launchctl",
-                          'printf \'%s\\n\' "$*" >> "$YORHA_TEST_LAUNCHCTL_LOG"\n')
-        self.write_double(fakebin, "brew", "exit 0\n")
-        self.write_double(fakebin, "pkill", "exit 0\n")
-        self.write_double(fakebin, "sw_vers", "printf '26.0\\n'\n")
-        self.write_double(fakebin, "csrutil", "printf 'System Integrity Protection status: enabled.\\n'\n")
+            self.write_double(fakebin, "launchctl", r'''
+printf '%s\n' "$*" >> "$YORHA_TEST_LAUNCHCTL_LOG"
+case "$1:$2" in
+  print:*com.yorha.appearance-watcher)
+    [ -f "$YORHA_TEST_JOB_STATE" ] ;;
+  bootout:*com.yorha.appearance-watcher)
+    rm -f "$YORHA_TEST_JOB_STATE" ;;
+  bootstrap:*)
+    case "$3" in
+      *com.yorha.appearance-watcher.plist)
+        : > "$YORHA_TEST_JOB_STATE" ;;
+    esac ;;
+esac
+exit 0
+''')
+            self.write_double(fakebin, "brew", "exit 0\n")
+            self.write_double(fakebin, "pkill", "exit 0\n")
+            self.write_double(fakebin, "sw_vers", "printf '26.0\\n'\n")
+            self.write_double(fakebin, "csrutil", "printf 'System Integrity Protection status: enabled.\\n'\n")
 
-        generated = subprocess.run(
-            [str(ROOT / "bin/yorha-backup.sh")], env=env,
-            text=True, capture_output=True, check=True)
-        snapshot = Path(generated.stdout.strip().splitlines()[-1])
-        restore = snapshot / "restore.sh"
-        self.assertTrue(restore.is_file())
+            generated = subprocess.run(
+                [str(ROOT / "bin/yorha-backup.sh")], env=env,
+                text=True, capture_output=True, check=True)
+            snapshot = Path(generated.stdout.strip().splitlines()[-1])
+            restore = snapshot / "restore.sh"
+            self.assertTrue(restore.is_file())
 
-        appearance = yorha / "appearance"
-        runtime_paths = [
-            appearance / "yorha-system.heic",
-            appearance / "yorha-icon-light.png",
-            appearance / "yorha-icon-dark.png",
-            appearance / "last-successful-mode",
-            yorha / "bin/yorha-appearance-watcher",
-            yorha / "bin/apply-appearance.sh",
-            yorha / "logs/appearance.log",
-        ]
-        for path in runtime_paths:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text("installed\n")
-        (appearance / "apply.lock").mkdir()
+            # Simulate deployment replacing the original plist while its new
+            # job is loaded, then populate every appearance runtime target.
+            plist.write_text("deployed YoRHa plist\n")
+            job_state.write_text("deployed job loaded\n")
+            self.assertNotEqual(plist.read_bytes(), original_plist)
+            self.assertTrue(job_state.is_file())
+            appearance = yorha / "appearance"
+            runtime_paths = [
+                appearance / "yorha-system.heic",
+                appearance / "yorha-icon-light.png",
+                appearance / "yorha-icon-dark.png",
+                appearance / "last-successful-mode",
+                yorha / "bin/yorha-appearance-watcher",
+                yorha / "bin/apply-appearance.sh",
+                yorha / "logs/appearance.log",
+            ]
+            for path in runtime_paths:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("installed\n")
+            (appearance / "apply.lock").mkdir()
 
-        subprocess.run([str(restore)], env=env, check=True,
-                       text=True, capture_output=True)
+            subprocess.run([str(restore)], env=env, check=True,
+                           text=True, capture_output=True)
 
-        for path in runtime_paths:
-            self.assertFalse(path.exists(), path)
-        self.assertFalse((appearance / "apply.lock").exists())
-        self.assertTrue((yorha / "keep.txt").is_file())
-        self.assertEqual(plist.read_text(), "pre-existing plist\n")
-        self.assertIn("bootout", launchctl_log.read_text())
-        self.assertIn("com.yorha.appearance-watcher", launchctl_log.read_text())
-        self.assertEqual(wallpaper_state.read_text().strip(), str(recorded_wallpaper))
+            for path in runtime_paths:
+                self.assertFalse(path.exists(), path)
+            self.assertFalse((appearance / "apply.lock").exists())
+            self.assertTrue((yorha / "keep.txt").is_file())
+            self.assertEqual(plist.read_bytes(), original_plist)
+            self.assertTrue(job_state.is_file())
+            calls = launchctl_log.read_text().splitlines()
+            label = "com.yorha.appearance-watcher"
+            self.assertTrue(any("bootout" in call and label in call for call in calls))
+            self.assertTrue(any("bootstrap" in call and str(plist) in call for call in calls))
+            self.assertEqual(wallpaper_state.read_text().strip(), str(recorded_wallpaper))
 
-def test_docs_state_boundary(self):
-    readme = (ROOT / "README.md").read_text().lower()
-    decisions = (ROOT / "docs/DECISIONS.md").read_text().lower()
-    self.assertIn("automatic appearance", readme)
-    self.assertIn("ghostty remains permanently dark", readme)
-    self.assertIn("appearance-watcher", decisions)
-    self.assertIn("prefers-color-scheme", decisions)
+    def test_docs_state_boundary(self):
+        readme = (ROOT / "README.md").read_text().lower()
+        decisions = (ROOT / "docs/DECISIONS.md").read_text().lower()
+        self.assertIn("automatic appearance", readme)
+        self.assertIn("ghostty remains permanently dark", readme)
+        self.assertIn("appearance-watcher", decisions)
+        self.assertIn("prefers-color-scheme", decisions)
 ```
 
-This test must never execute the generated restore with the real `HOME`, `launchctl`, `osascript`, `brew`, or `pkill`. The pre-existing `~/.config/yorha/keep.txt` and watcher plist assertions prevent an implementation from passing by recursively deleting the broad parent or unconditionally deleting the plist.
+This test must never execute the generated restore with the real `HOME`, `launchctl`, `osascript`, `brew`, or `pkill`. The pre-existing `~/.config/yorha/keep.txt`, byte-exact original plist, and loaded-job-state assertions prevent an implementation from passing by recursively deleting the broad parent, merely retaining the deployed plist, or failing to re-bootstrap the prior job.
 
 - [ ] **Step 2: Confirm failure**
 
 Run: `python3 -m unittest tests.test_deployment_contract -v`
 
-- [ ] **Step 3: Extend generated restore script safely**
+- [ ] **Step 3: Snapshot and restore the prior watcher job safely**
 
-Before its path-reversion loop, add:
+Before emitting `restore.sh`, capture both the original plist bytes and the GUI-domain loaded state:
+
+```bash
+APPEARANCE_LABEL=com.yorha.appearance-watcher
+APPEARANCE_PLIST="$HOME/Library/LaunchAgents/$APPEARANCE_LABEL.plist"
+if [ -f "$APPEARANCE_PLIST" ]; then
+  cp "$APPEARANCE_PLIST" "$DEST/appearance-watcher.plist.original"
+fi
+if launchctl print "gui/$(id -u)/$APPEARANCE_LABEL" >/dev/null 2>&1; then
+  printf 'loaded\n' > "$DEST/appearance-watcher.loaded-state"
+else
+  printf 'unloaded\n' > "$DEST/appearance-watcher.loaded-state"
+fi
+```
+
+Before the generated restore script's path-reversion loop, boot out the deployed job and remove only the appearance runtime targets. Then atomically restore the original plist bytes when the snapshot contains them and re-bootstrap that plist only when the recorded state was `loaded`:
 
 ```bash
 LABEL=com.yorha.appearance-watcher
+PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 launchctl bootout "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || true
-if ! grep -qxF "$LABEL.plist" "$HERE/launchagents.txt" 2>/dev/null; then
-  rm -f "$HOME/Library/LaunchAgents/$LABEL.plist"
-fi
 rm -f "$HOME/.config/yorha/bin/yorha-appearance-watcher"
 rm -f "$HOME/.config/yorha/bin/apply-appearance.sh"
 rm -f "$HOME/.config/yorha/logs/appearance.log"
 rm -rf "$HOME/.config/yorha/appearance"
+
+if [ -f "$HERE/appearance-watcher.plist.original" ]; then
+  PLIST_TMP="$PLIST.restore.$$"
+  cp "$HERE/appearance-watcher.plist.original" "$PLIST_TMP"
+  mv "$PLIST_TMP" "$PLIST"
+  if grep -qxF loaded "$HERE/appearance-watcher.loaded-state" 2>/dev/null; then
+    launchctl bootstrap "gui/$(id -u)" "$PLIST" \
+      || echo "warning: could not restore pre-existing $LABEL job" >&2
+  fi
+else
+  rm -f "$PLIST"
+fi
 ```
 
-Do not broaden the recursive target.
+Do not infer prior state from the post-deployment plist or from `launchagents.txt`: only the copied `.original` file and `appearance-watcher.loaded-state` are authoritative. Do not broaden the recursive target. An originally present-but-unloaded plist is restored without bootstrapping; an originally absent plist is removed.
 
 - [ ] **Step 4: Update documentation**
 

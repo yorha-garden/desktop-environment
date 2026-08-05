@@ -171,7 +171,7 @@ No failure path falls back to changing Ghostty.
 
 Chrome is used only when a developer explicitly runs `bin/regenerate-system-wallpaper.sh --with-chrome`; it is not a deployment or runtime dependency. Swift 6.2 and `swiftc` are present on the target host.
 
-The backup/restore flow will boot out and remove `com.yorha.appearance-watcher`, its plist, binary, coordinator, appearance state, logs, copied dynamic HEIC, and copied crest variants. It will then restore the pre-install wallpaper and existing desktop configuration as it does today. Cleanup targets are explicit paths beneath `~/.config/yorha/` and `~/Library/LaunchAgents/`.
+The backup captures byte-for-byte contents of any pre-existing `com.yorha.appearance-watcher.plist` and separately records whether that GUI-domain job was loaded. Restore boots out the deployed job, removes its runtime binary, coordinator, appearance state, logs, copied dynamic HEIC, and copied crest variants, then reinstates the original plist and re-bootstraps it only when it was loaded at snapshot time; an originally absent plist is removed. It also restores the pre-install wallpaper and existing desktop configuration as it does today. Cleanup targets are explicit paths beneath `~/.config/yorha/` and `~/Library/LaunchAgents/`.
 
 ## Verification strategy
 
