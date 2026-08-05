@@ -963,7 +963,7 @@ tell application "System Events"
   set wallpaperPaths to {}
   repeat with desktopItem in every desktop
     set desktopPicture to picture of desktopItem
-    set end of wallpaperPaths to POSIX path of (desktopPicture as alias)
+    set end of wallpaperPaths to POSIX path of (POSIX file desktopPicture as alias)
   end repeat
 end tell
 set AppleScript's text item delimiters to linefeed
@@ -984,6 +984,26 @@ assert_all_desktops_use_runtime_heic() {
   [ "$seen" -gt 0 ] && [ "$seen" -eq "$expected_count" ]
 }
 
+wait_for_all_desktops_to_use_runtime_heic() {
+  output="$1"
+  pending="${output}.pending"
+  attempt=1
+  while [ "$attempt" -le 40 ]; do
+    if capture_wallpaper_paths > "$pending" 2>/dev/null \
+        && assert_all_desktops_use_runtime_heic "$pending" >/dev/null 2>&1; then
+      mv "$pending" "$output"
+      return 0
+    fi
+    attempt=$((attempt + 1))
+    sleep 0.25
+  done
+  echo "timed out waiting for every desktop to adopt $RUNTIME_HEIC" >&2
+  echo "desktop count: $(osascript -e 'tell application \"System Events\" to count every desktop')" >&2
+  echo "last reported wallpaper paths:" >&2
+  cat "$pending" >&2 2>/dev/null || true
+  return 1
+}
+
 assert_sketchybar_field() {
   item="$1"; field="$2"; expected="$3"
   sketchybar --query "$item" | python3 -c '
@@ -996,8 +1016,7 @@ assert actual.lower() == expected.lower(), f"{sys.argv[1]}: {actual!r} != {expec
 ' "$field" "$expected"
 }
 
-capture_wallpaper_paths > "$VERIFY_DIR/wallpaper.deployed"
-assert_all_desktops_use_runtime_heic "$VERIFY_DIR/wallpaper.deployed"
+wait_for_all_desktops_to_use_runtime_heic "$VERIFY_DIR/wallpaper.deployed"
 
 REAL_SKETCHYBAR="$(command -v sketchybar)"
 PROBE="$VERIFY_DIR/sketchybar-probe"
@@ -1015,7 +1034,7 @@ test "$(cat "$HOME/.config/yorha/appearance/last-successful-mode")" = light
 assert_sketchybar_field clock label.color 0xff4a4741
 assert_sketchybar_field date label.color 0xff4a4741
 assert_sketchybar_field yorha label.color 0xff4a4741
-assert_sketchybar_field yorha_icon background.image.value \
+assert_sketchybar_field yorha_icon geometry.background.image.value \
   "$HOME/.config/yorha/appearance/yorha-icon-light.png"
 
 before_noop="$(wc -l < "$PROBE_LOG" | tr -d ' ')"
@@ -1029,7 +1048,7 @@ test "$(cat "$HOME/.config/yorha/appearance/last-successful-mode")" = dark
 assert_sketchybar_field clock label.color 0xffd8d4c4
 assert_sketchybar_field date label.color 0xffd8d4c4
 assert_sketchybar_field yorha label.color 0xffbc9a5a
-assert_sketchybar_field yorha_icon background.image.value \
+assert_sketchybar_field yorha_icon geometry.background.image.value \
   "$HOME/.config/yorha/appearance/yorha-icon-dark.png"
 
 capture_wallpaper_paths > "$VERIFY_DIR/wallpaper.after-forced-modes"
@@ -1038,7 +1057,17 @@ diff -u "$VERIFY_DIR/wallpaper.deployed" "$VERIFY_DIR/wallpaper.after-forced-mod
 YORHA_SKETCHYBAR_BIN="$PROBE" "$APPLY" "$(cat "$VERIFY_DIR/effective-mode")" --force
 ```
 
-`capture_wallpaper_paths` emits one POSIX path per desktop. The assertion rejects empty entries, any repository or stale path, zero desktops, and a line count that differs from `System Events`' desktop count. The probe executes the real SketchyBar command while recording coordinator invocations, so the unchanged call count proves same-mode no-op and the increment proves `--force` bypasses it. Do not change the macOS appearance setting or attempt to force a HEIC frame.
+`capture_wallpaper_paths` emits one POSIX path per desktop. System Events returns
+the `picture` property as POSIX text on this host, so the explicit `POSIX file`
+coercion is required before converting it to an alias. The bounded poll gives the
+wallpaper service up to ten seconds to expose the newly assigned path before the
+invariance baseline is established; timeout output includes the expected desktop
+count and last reported paths. The assertion rejects empty entries, any repository
+or stale path, zero desktops, and a line count that differs from `System Events`'
+desktop count. The probe executes the real SketchyBar command while recording
+coordinator invocations, so the unchanged call count proves same-mode no-op and the
+increment proves `--force` bypasses it. Do not change the macOS appearance setting
+or attempt to force a HEIC frame.
 
 - [ ] **Step 8: Verify crash recovery and Ghostty isolation**
 
@@ -1072,3 +1101,29 @@ git diff --check f9fd880..HEAD
 ```
 
 Expected: only intentionally unabsorbed user changes remain; every commit after the recorded feature base is shown without relying on a fixed count; no whitespace errors.
+
+#### Task 6 review correction (2026-08-06)
+
+This correction supersedes the original broad restore snippets above:
+
+- `preexisting.txt` must never contain the parent `.config/yorha`. Record only
+  installation-owned files under that parent (the five shell files, two
+  non-appearance runtime executables, and named cache/log files). The appearance
+  watcher binary, coordinator, appearance directory, and appearance log remain
+  the narrow explicit cleanup targets. User-created siblings such as `secrets/`,
+  `BACKUP_PATH`, `watchdog.off`, and unrelated files must survive.
+- Validate `appearance-watcher.loaded-state` as exactly `loaded` or `unloaded`
+  before changing live state. When prior plist bytes exist, copy them completely
+  to a same-directory `*.restore.*` temporary before any mutation. Clean that
+  temporary on `EXIT`, `HUP`, `INT`, and `TERM`; boot out the deployed job, remove
+  only owned runtime, then move the staged file into place. Copy, move, bootstrap,
+  and state failures exit nonzero and must never print `Restore complete.`
+- Sandbox coverage must exercise present+loaded, present+unloaded, absent,
+  missing/corrupt state, partial copy failure, move failure, bootstrap failure,
+  and signal cleanup. The absent case creates an unrelated YoRHa sibling only
+  after the snapshot and proves it survives.
+- Never execute the full configured restore against the user's real `HOME` during
+  verification. Migrate the immutable pre-install payload into a separate derived
+  appearance-aware baseline, validate the README command against a copy under a
+  temporary `HOME`, and atomically repoint `BACKUP_PATH`; retain the original
+  baseline and record recovery to its old pointer value.

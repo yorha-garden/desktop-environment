@@ -568,42 +568,41 @@ class RestoreContractTests(unittest.TestCase):
         path.chmod(0o755)
         return path
 
-    def test_generated_restore_cleans_appearance_runtime_in_sandbox(self):
-        with tempfile.TemporaryDirectory() as raw:
-            sandbox = Path(raw)
-            home = sandbox / "home"
-            fakebin = sandbox / "bin"
-            home.mkdir(); fakebin.mkdir()
-            (home / ".zshrc").write_text("baseline\n")
-
-            yorha = home / ".config/yorha"
-            yorha.mkdir(parents=True)
-            (yorha / "keep.txt").write_text("pre-existing\n")
-            agents = home / "Library/LaunchAgents"
-            agents.mkdir(parents=True)
-            plist = agents / "com.yorha.appearance-watcher.plist"
-            original_plist = b"pre-existing plist bytes\n"
+    def make_restore_sandbox(self, original_plist=b"pre-existing plist bytes\n",
+                             originally_loaded=True):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        sandbox = Path(temporary.name)
+        home = sandbox / "home"
+        fakebin = sandbox / "bin"
+        home.mkdir(); fakebin.mkdir()
+        (home / ".zshrc").write_text("baseline\n")
+        agents = home / "Library/LaunchAgents"
+        agents.mkdir(parents=True)
+        plist = agents / "com.yorha.appearance-watcher.plist"
+        if original_plist is not None:
             plist.write_bytes(original_plist)
 
-            # The snapshot sees an already-loaded pre-existing job. The fake
-            # launchctl mutates this file for bootout/bootstrap state changes.
-            job_state = sandbox / "appearance-job-loaded"
+        job_state = sandbox / "appearance-job-loaded"
+        if originally_loaded:
             job_state.write_text("loaded\n")
-            recorded_wallpaper = sandbox / "recorded.heic"
-            recorded_wallpaper.write_bytes(b"baseline wallpaper")
-            wallpaper_state = sandbox / "wallpaper-state"
-            launchctl_log = sandbox / "launchctl-log"
-            env = os.environ.copy()
-            env.update({
-                "HOME": str(home),
-                "PATH": f"{fakebin}:/usr/bin:/bin",
-                "YORHA_TEST_RECORDED_WALLPAPER": str(recorded_wallpaper),
-                "YORHA_TEST_WALLPAPER_STATE": str(wallpaper_state),
-                "YORHA_TEST_LAUNCHCTL_LOG": str(launchctl_log),
-                "YORHA_TEST_JOB_STATE": str(job_state),
-            })
+        recorded_wallpaper = sandbox / "recorded.heic"
+        recorded_wallpaper.write_bytes(b"baseline wallpaper")
+        wallpaper_state = sandbox / "wallpaper-state"
+        launchctl_log = sandbox / "launchctl-log"
+        failure_ready = sandbox / "failure-ready"
+        env = os.environ.copy()
+        env.update({
+            "HOME": str(home),
+            "PATH": f"{fakebin}:/usr/bin:/bin",
+            "YORHA_TEST_RECORDED_WALLPAPER": str(recorded_wallpaper),
+            "YORHA_TEST_WALLPAPER_STATE": str(wallpaper_state),
+            "YORHA_TEST_LAUNCHCTL_LOG": str(launchctl_log),
+            "YORHA_TEST_JOB_STATE": str(job_state),
+            "YORHA_TEST_FAILURE_READY": str(failure_ready),
+        })
 
-            self.write_double(fakebin, "osascript", r'''
+        self.write_double(fakebin, "osascript", r'''
 if [ "$1" = "-e" ]; then
   case "$2" in
     *"get picture of current desktop"*)
@@ -614,68 +613,223 @@ elif [ "$1" = "-" ]; then
 fi
 exit 0
 ''')
-            self.write_double(fakebin, "launchctl", r'''
+        self.write_double(fakebin, "launchctl", r'''
 printf '%s\n' "$*" >> "$YORHA_TEST_LAUNCHCTL_LOG"
 case "$1:$2" in
   print:*com.yorha.appearance-watcher)
-    [ -f "$YORHA_TEST_JOB_STATE" ] ;;
+    [ -f "$YORHA_TEST_JOB_STATE" ]
+    exit $? ;;
   bootout:*com.yorha.appearance-watcher)
-    rm -f "$YORHA_TEST_JOB_STATE" ;;
+    /bin/rm -f "$YORHA_TEST_JOB_STATE"
+    exit 0 ;;
   bootstrap:*)
     case "$3" in
       *com.yorha.appearance-watcher.plist)
-        : > "$YORHA_TEST_JOB_STATE" ;;
+        if [ "${YORHA_TEST_RESTORE_FAILURE:-}" = bootstrap ]; then
+          exit 73
+        fi
+        : > "$YORHA_TEST_JOB_STATE"
+        exit 0 ;;
     esac ;;
 esac
 exit 0
 ''')
-            self.write_double(fakebin, "brew", "exit 0\n")
-            self.write_double(fakebin, "pkill", "exit 0\n")
-            self.write_double(fakebin, "sw_vers", "printf '26.0\\n'\n")
-            self.write_double(fakebin, "csrutil", "printf 'System Integrity Protection status: enabled.\\n'\n")
+        self.write_double(fakebin, "cp", r'''
+case "${YORHA_TEST_RESTORE_FAILURE:-}:$2" in
+  cp:*.restore.*)
+    printf partial > "$2"
+    exit 71 ;;
+  pause:*.restore.*)
+    printf partial > "$2"
+    : > "$YORHA_TEST_FAILURE_READY"
+    while :; do /bin/sleep 1; done ;;
+esac
+exec /bin/cp "$@"
+''')
+        self.write_double(fakebin, "mv", r'''
+case "${YORHA_TEST_RESTORE_FAILURE:-}:$1" in
+  mv:*.restore.*) exit 72 ;;
+esac
+exec /bin/mv "$@"
+''')
+        self.write_double(fakebin, "brew", "exit 0\n")
+        self.write_double(fakebin, "pkill", "exit 0\n")
+        self.write_double(fakebin, "sw_vers", "printf '26.0\\n'\n")
+        self.write_double(fakebin, "csrutil",
+                          "printf 'System Integrity Protection status: enabled.\\n'\n")
 
-            generated = subprocess.run(
-                [str(ROOT / "bin/yorha-backup.sh")], env=env,
-                text=True, capture_output=True, check=True)
-            snapshot = Path(generated.stdout.strip().splitlines()[-1])
-            restore = snapshot / "restore.sh"
-            self.assertTrue(restore.is_file())
+        generated = subprocess.run(
+            [str(ROOT / "bin/yorha-backup.sh")], env=env,
+            text=True, capture_output=True, check=True)
+        snapshot = Path(generated.stdout.strip().splitlines()[-1])
+        restore = snapshot / "restore.sh"
+        self.assertTrue(restore.is_file())
+        return {
+            "sandbox": sandbox, "home": home, "agents": agents,
+            "plist": plist, "original_plist": original_plist,
+            "job_state": job_state, "recorded_wallpaper": recorded_wallpaper,
+            "wallpaper_state": wallpaper_state, "launchctl_log": launchctl_log,
+            "failure_ready": failure_ready, "env": env,
+            "snapshot": snapshot, "restore": restore,
+        }
 
-            # Simulate deployment replacing the original plist while its new
-            # job is loaded, then populate every appearance runtime target.
-            plist.write_text("deployed YoRHa plist\n")
-            job_state.write_text("deployed job loaded\n")
-            self.assertNotEqual(plist.read_bytes(), original_plist)
-            self.assertTrue(job_state.is_file())
-            appearance = yorha / "appearance"
-            runtime_paths = [
-                appearance / "yorha-system.heic",
-                appearance / "yorha-icon-light.png",
-                appearance / "yorha-icon-dark.png",
-                appearance / "last-successful-mode",
-                yorha / "bin/yorha-appearance-watcher",
-                yorha / "bin/apply-appearance.sh",
-                yorha / "logs/appearance.log",
-            ]
-            for path in runtime_paths:
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text("installed\n")
-            (appearance / "apply.lock").mkdir()
+    def deploy_appearance_fixture(self, context):
+        home = context["home"]
+        yorha = home / ".config/yorha"
+        yorha.mkdir(parents=True, exist_ok=True)
+        keep = yorha / "keep.txt"
+        keep.write_text("unrelated after snapshot\n")
+        context["plist"].write_text("deployed YoRHa plist\n")
+        context["job_state"].write_text("deployed job loaded\n")
+        appearance = yorha / "appearance"
+        runtime_paths = [
+            appearance / "yorha-system.heic",
+            appearance / "yorha-icon-light.png",
+            appearance / "yorha-icon-dark.png",
+            appearance / "last-successful-mode",
+            yorha / "bin/yorha-appearance-watcher",
+            yorha / "bin/apply-appearance.sh",
+            yorha / "logs/appearance.log",
+        ]
+        for path in runtime_paths:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("installed\n")
+        (appearance / "apply.lock").mkdir()
+        context.update({"keep": keep, "appearance": appearance,
+                        "runtime_paths": runtime_paths})
 
-            subprocess.run([str(restore)], env=env, check=True,
-                           text=True, capture_output=True)
+    def run_restore(self, context, failure=None):
+        env = context["env"].copy()
+        if failure:
+            env["YORHA_TEST_RESTORE_FAILURE"] = failure
+        return subprocess.run([str(context["restore"])], env=env,
+                              text=True, capture_output=True)
 
-            for path in runtime_paths:
-                self.assertFalse(path.exists(), path)
-            self.assertFalse((appearance / "apply.lock").exists())
-            self.assertTrue((yorha / "keep.txt").is_file())
-            self.assertEqual(plist.read_bytes(), original_plist)
-            self.assertTrue(job_state.is_file())
-            calls = launchctl_log.read_text().splitlines()
-            label = "com.yorha.appearance-watcher"
-            self.assertTrue(any("bootout" in call and label in call for call in calls))
-            self.assertTrue(any("bootstrap" in call and str(plist) in call for call in calls))
-            self.assertEqual(wallpaper_state.read_text().strip(), str(recorded_wallpaper))
+    def assert_no_plist_temps(self, context):
+        self.assertEqual(list(context["agents"].glob("*.restore.*")), [])
+
+    def assert_runtime_removed(self, context):
+        for path in context["runtime_paths"]:
+            self.assertFalse(path.exists(), path)
+        self.assertFalse((context["appearance"] / "apply.lock").exists())
+        self.assertTrue(context["keep"].is_file())
+
+    def test_present_loaded_restores_exact_plist_and_job(self):
+        context = self.make_restore_sandbox()
+        self.deploy_appearance_fixture(context)
+        result = self.run_restore(context)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_runtime_removed(context)
+        self.assertEqual(context["plist"].read_bytes(), context["original_plist"])
+        self.assertTrue(context["job_state"].is_file())
+        calls = context["launchctl_log"].read_text().splitlines()
+        self.assertTrue(any("bootout" in call for call in calls))
+        self.assertTrue(any("bootstrap" in call and str(context["plist"]) in call
+                            for call in calls))
+        self.assertEqual(context["wallpaper_state"].read_text().strip(),
+                         str(context["recorded_wallpaper"]))
+        self.assertIn("Restore complete.", result.stdout)
+        self.assert_no_plist_temps(context)
+
+    def test_present_unloaded_restores_plist_without_bootstrap(self):
+        context = self.make_restore_sandbox(originally_loaded=False)
+        self.deploy_appearance_fixture(context)
+        result = self.run_restore(context)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_runtime_removed(context)
+        self.assertEqual(context["plist"].read_bytes(), context["original_plist"])
+        self.assertFalse(context["job_state"].exists())
+        calls = context["launchctl_log"].read_text().splitlines()
+        self.assertFalse(any("bootstrap" in call for call in calls))
+        self.assert_no_plist_temps(context)
+
+    def test_absent_snapshot_removes_only_owned_paths_and_preserves_later_file(self):
+        context = self.make_restore_sandbox(original_plist=None, originally_loaded=False)
+        preexisting = (context["snapshot"] / "preexisting.txt").read_text().splitlines()
+        self.assertFalse(any(line.startswith(".config/yorha\t") for line in preexisting))
+        self.deploy_appearance_fixture(context)
+        result = self.run_restore(context)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_runtime_removed(context)
+        self.assertFalse(context["plist"].exists())
+        self.assertFalse(context["job_state"].exists())
+        self.assert_no_plist_temps(context)
+
+    def test_missing_or_corrupt_loaded_state_fails_before_mutation(self):
+        for state in (None, "corrupt\n"):
+            with self.subTest(state=state):
+                context = self.make_restore_sandbox()
+                self.deploy_appearance_fixture(context)
+                state_path = context["snapshot"] / "appearance-watcher.loaded-state"
+                if state is None:
+                    state_path.unlink()
+                else:
+                    state_path.write_text(state)
+                result = self.run_restore(context)
+                self.assertEqual(result.returncode, 65)
+                self.assertEqual(context["plist"].read_text(), "deployed YoRHa plist\n")
+                self.assertTrue(context["job_state"].is_file())
+                self.assertTrue(all(path.exists() for path in context["runtime_paths"]))
+                self.assertIn("invalid appearance watcher state", result.stderr)
+                self.assertNotIn("Restore complete.", result.stdout)
+                self.assert_no_plist_temps(context)
+
+    def test_copy_failure_keeps_deployed_state_and_cleans_partial_temp(self):
+        context = self.make_restore_sandbox()
+        self.deploy_appearance_fixture(context)
+        result = self.run_restore(context, "cp")
+        self.assertEqual(result.returncode, 71)
+        self.assertEqual(context["plist"].read_text(), "deployed YoRHa plist\n")
+        self.assertTrue(context["job_state"].is_file())
+        self.assertTrue(all(path.exists() for path in context["runtime_paths"]))
+        self.assertNotIn("Restore complete.", result.stdout)
+        self.assert_no_plist_temps(context)
+
+    def test_move_failure_keeps_deployed_plist_but_stops_job_and_cleans_temp(self):
+        context = self.make_restore_sandbox()
+        self.deploy_appearance_fixture(context)
+        result = self.run_restore(context, "mv")
+        self.assertEqual(result.returncode, 72)
+        self.assertEqual(context["plist"].read_text(), "deployed YoRHa plist\n")
+        self.assertFalse(context["job_state"].exists())
+        self.assert_runtime_removed(context)
+        self.assertNotIn("Restore complete.", result.stdout)
+        self.assert_no_plist_temps(context)
+
+    def test_bootstrap_failure_restores_plist_but_reports_failure(self):
+        context = self.make_restore_sandbox()
+        self.deploy_appearance_fixture(context)
+        result = self.run_restore(context, "bootstrap")
+        self.assertEqual(result.returncode, 73)
+        self.assertEqual(context["plist"].read_bytes(), context["original_plist"])
+        self.assertFalse(context["job_state"].exists())
+        self.assert_runtime_removed(context)
+        self.assertNotIn("Restore complete.", result.stdout)
+        self.assert_no_plist_temps(context)
+
+    def test_signals_clean_partial_plist_temp_and_preserve_deployed_state(self):
+        for signum in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+            with self.subTest(signal=signum):
+                context = self.make_restore_sandbox()
+                self.deploy_appearance_fixture(context)
+                env = context["env"].copy()
+                env["YORHA_TEST_RESTORE_FAILURE"] = "pause"
+                process = subprocess.Popen(
+                    [str(context["restore"])], env=env, text=True,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    start_new_session=True)
+                deadline = time.monotonic() + 5
+                while (not context["failure_ready"].exists()
+                       and process.poll() is None and time.monotonic() < deadline):
+                    time.sleep(0.02)
+                self.assertTrue(context["failure_ready"].exists())
+                os.killpg(process.pid, signum)
+                process.communicate(timeout=5)
+                self.assertEqual(process.returncode, 128 + signum)
+                self.assertEqual(context["plist"].read_text(), "deployed YoRHa plist\n")
+                self.assertTrue(context["job_state"].is_file())
+                self.assertTrue(all(path.exists() for path in context["runtime_paths"]))
+                self.assert_no_plist_temps(context)
 
     def test_docs_state_boundary(self):
         readme = (ROOT / "README.md").read_text().lower()

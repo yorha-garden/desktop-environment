@@ -15,7 +15,21 @@ mkdir -p "$DEST"
 # Paths the install creates or modifies. Restore decides per-path using preexisting.txt.
 TARGETS=(
   "$HOME/.config/ghostty"
-  "$HOME/.config/yorha"
+  "$HOME/.config/yorha/palette.sh"
+  "$HOME/.config/yorha/shell.zsh"
+  "$HOME/.config/yorha/starship.toml"
+  "$HOME/.config/yorha/fastfetch.jsonc"
+  "$HOME/.config/yorha/logo.txt"
+  "$HOME/.config/yorha/bin/pod-oracle.py"
+  "$HOME/.config/yorha/bin/ubersicht-watchdog.sh"
+  "$HOME/.config/yorha/cache/pod-oracle.json"
+  "$HOME/.config/yorha/cache/pod-oracle.json.tmp"
+  "$HOME/.config/yorha/cache/pod-oracle.log"
+  "$HOME/.config/yorha/cache/pod-oracle.stderr.log"
+  "$HOME/.config/yorha/cache/watchdog.log"
+  "$HOME/.config/yorha/cache/watchdog.strikes"
+  "$HOME/.config/yorha/cache/watchdog.stderr.log"
+  "$HOME/.config/yorha/cache/sketchybar-minute.stderr.log"
   "$HOME/.config/sketchybar"
   "$HOME/.config/aerospace"
   "$HOME/.config/borders"
@@ -81,8 +95,46 @@ fi
 cat > "$DEST/restore.sh" <<'RESTORE'
 #!/usr/bin/env bash
 # Return this Mac to the state captured in this snapshot.
-set -uo pipefail
+set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LABEL=com.yorha.appearance-watcher
+PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+PLIST_STATE_FILE="$HERE/appearance-watcher.loaded-state"
+RESTORE_PLIST_TMP=""
+
+cleanup_restore_temp() {
+  [ -z "$RESTORE_PLIST_TMP" ] || rm -f -- "$RESTORE_PLIST_TMP"
+}
+trap cleanup_restore_temp EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+if [ ! -f "$PLIST_STATE_FILE" ]; then
+  echo "error: invalid appearance watcher state: missing $PLIST_STATE_FILE" >&2
+  exit 65
+fi
+if grep -qxF loaded "$PLIST_STATE_FILE"; then
+  ORIGINAL_APPEARANCE_STATE=loaded
+elif grep -qxF unloaded "$PLIST_STATE_FILE"; then
+  ORIGINAL_APPEARANCE_STATE=unloaded
+else
+  echo "error: invalid appearance watcher state in $PLIST_STATE_FILE" >&2
+  exit 65
+fi
+
+# Stage the complete original bytes beside the destination before changing any
+# live state. A partial or failed copy is removed by the EXIT/signal cleanup.
+if [ -f "$HERE/appearance-watcher.plist.original" ]; then
+  RESTORE_PLIST_TMP="$PLIST.restore.$$"
+  if cp "$HERE/appearance-watcher.plist.original" "$RESTORE_PLIST_TMP"; then
+    :
+  else
+    RESTORE_STATUS=$?
+    echo "error: could not stage the original $LABEL plist" >&2
+    exit "$RESTORE_STATUS"
+  fi
+fi
 
 echo "==> stopping services this install started"
 # Must happen BEFORE deleting configs: killing the config does not kill the daemon,
@@ -125,8 +177,6 @@ else
 fi
 
 echo "==> restoring appearance watcher"
-LABEL=com.yorha.appearance-watcher
-PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 launchctl bootout "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || true
 rm -f "$HOME/.config/yorha/bin/yorha-appearance-watcher"
 rm -f "$HOME/.config/yorha/bin/apply-appearance.sh"
@@ -134,12 +184,21 @@ rm -f "$HOME/.config/yorha/logs/appearance.log"
 rm -rf "$HOME/.config/yorha/appearance"
 
 if [ -f "$HERE/appearance-watcher.plist.original" ]; then
-  PLIST_TMP="$PLIST.restore.$$"
-  cp "$HERE/appearance-watcher.plist.original" "$PLIST_TMP"
-  mv "$PLIST_TMP" "$PLIST"
-  if grep -qxF loaded "$HERE/appearance-watcher.loaded-state" 2>/dev/null; then
-    launchctl bootstrap "gui/$(id -u)" "$PLIST" \
-      || echo "warning: could not restore pre-existing $LABEL job" >&2
+  if mv "$RESTORE_PLIST_TMP" "$PLIST"; then
+    RESTORE_PLIST_TMP=""
+  else
+    RESTORE_STATUS=$?
+    echo "error: could not install the original $LABEL plist" >&2
+    exit "$RESTORE_STATUS"
+  fi
+  if [ "$ORIGINAL_APPEARANCE_STATE" = loaded ]; then
+    if launchctl bootstrap "gui/$(id -u)" "$PLIST"; then
+      :
+    else
+      RESTORE_STATUS=$?
+      echo "error: could not restore pre-existing $LABEL job" >&2
+      exit "$RESTORE_STATUS"
+    fi
   fi
 else
   rm -f "$PLIST"

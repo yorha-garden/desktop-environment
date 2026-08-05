@@ -47,7 +47,7 @@ to see exactly what changed on the machine.
 | `assets/wallpaper.svg` / `wallpaper-dark.svg` | Developer SVG sources for the matching light and dark wallpaper frames. |
 | `assets/yorha-system.heic` | Committed two-frame 5120×2880 dynamic wallpaper; deployment copies and assigns it once, then macOS owns frame selection. |
 | `assets/yorha-icon-light.png` / `yorha-icon-dark.png` | Fixed-name SketchyBar crests copied into the appearance runtime tree. |
-| `launchd/` | Two agents: the oracle's 5-minute timer and the Übersicht watchdog. |
+| `launchd/` | Four user agents; see Automatic appearance below for lifecycle and responsibilities. |
 | `docs/` | Architecture, palette, and the decision log. |
 
 ---
@@ -251,11 +251,14 @@ the marquee by 40px.
 bash "$(cat ~/.config/yorha/BACKUP_PATH)/restore.sh"
 ```
 
-Points at an immutable pre-install baseline. Stops services, restores the exact
-prior appearance-watcher plist and loaded/unloaded state, removes only the feature's
-appearance runtime, restores the recorded wallpaper with an argv-bound path,
-restores both Ghostty configs and `~/.zshrc`, and derives uninstall advice by
-diffing the captured package manifest. Verified by sandboxed dry run.
+Points at an appearance-aware derived copy of the immutable pre-install baseline;
+the original captured baseline is never modified or deleted. Restore validates the
+recorded watcher state before changing anything, stages prior plist bytes beside
+their destination, removes only explicit installation-owned paths, restores the
+recorded wallpaper with an argv-bound path, restores both Ghostty configs and
+`~/.zshrc`, and derives uninstall advice from the captured package manifest. Copy,
+move, bootstrap, or state-integrity failures exit nonzero without printing false
+success. Verified against a copy under a temporary `HOME`, never the real session.
 
 ---
 
