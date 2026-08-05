@@ -42,6 +42,56 @@ chmod +x "$HOME/.config/sketchybar/sketchybarrc"
 command -v sketchybar >/dev/null && sketchybar --reload >/dev/null 2>&1 || true
 say "sketchybar -> ~/.config/sketchybar/ (rc + crest, reloaded)"
 
+# --- appearance runtime BEGIN
+APPEARANCE="$HOME/.config/yorha/appearance"
+YORHA_BIN="$HOME/.config/yorha/bin"
+mkdir -p "$APPEARANCE" "$YORHA_BIN" "$HOME/.config/yorha/logs" \
+  "$HOME/Library/LaunchAgents"
+
+install_atomic() {
+  source="$1"
+  destination="$2"
+  temporary="${destination}.tmp.$$"
+  cp "$source" "$temporary"
+  mv "$temporary" "$destination"
+}
+
+"$REPO/bin/make-wallpaper.sh" --verify
+RUNTIME_WALLPAPER="$APPEARANCE/yorha-system.heic"
+RUNTIME_COORDINATOR="$YORHA_BIN/apply-appearance.sh"
+RUNTIME_WATCHER="$YORHA_BIN/yorha-appearance-watcher"
+install_atomic "$REPO/assets/yorha-system.heic" "$RUNTIME_WALLPAPER"
+install_atomic "$REPO/assets/yorha-icon-light.png" "$APPEARANCE/yorha-icon-light.png"
+install_atomic "$REPO/assets/yorha-icon-dark.png" "$APPEARANCE/yorha-icon-dark.png"
+install_atomic "$REPO/bin/apply-appearance.sh" "$RUNTIME_COORDINATOR"
+chmod +x "$RUNTIME_COORDINATOR"
+
+WATCHER_TMP="$RUNTIME_WATCHER.tmp.$$"
+swiftc -O "$REPO/bin/appearance-watcher.swift" -o "$WATCHER_TMP"
+chmod +x "$WATCHER_TMP"
+mv "$WATCHER_TMP" "$RUNTIME_WATCHER"
+
+osascript - "$RUNTIME_WALLPAPER" <<'AS'
+on run argv
+  tell application "System Events" to set picture of every desktop to POSIX file (item 1 of argv)
+end run
+AS
+
+APPEARANCE_PLIST="$HOME/Library/LaunchAgents/com.yorha.appearance-watcher.plist"
+PLIST_TMP="$APPEARANCE_PLIST.tmp.$$"
+sed "s|HOME_PATH|$HOME|g" "$REPO/launchd/com.yorha.appearance-watcher.plist" > "$PLIST_TMP"
+mv "$PLIST_TMP" "$APPEARANCE_PLIST"
+launchctl bootout "gui/$(id -u)/com.yorha.appearance-watcher" >/dev/null 2>&1 || true
+launchctl bootstrap "gui/$(id -u)" "$APPEARANCE_PLIST"
+if [ "$(defaults read -g AppleInterfaceStyle 2>/dev/null || true)" = Dark ]; then
+  MODE=dark
+else
+  MODE=light
+fi
+"$RUNTIME_COORDINATOR" "$MODE" --force \
+  || say "appearance -> watcher installed; SketchyBar update will retry"
+# --- appearance runtime END
+
 # --- aerospace (installed but intentionally not running) -------------------
 if [ -f "$REPO/config/aerospace/aerospace.toml" ]; then
   mkdir -p "$HOME/.config/aerospace"

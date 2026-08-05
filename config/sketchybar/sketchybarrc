@@ -3,6 +3,16 @@ BONE=0xffcac5b0
 INK=0xff4a4741
 ALERT=0xffbb3b36
 
+if [ "$(defaults read -g AppleInterfaceStyle 2>/dev/null || true)" = Dark ]; then
+  MODE=dark
+  TEXT=0xffd8d4c4; BRAND=0xffbc9a5a
+  CREST="$HOME/.config/yorha/appearance/yorha-icon-dark.png"
+else
+  MODE=light
+  TEXT=0xff4a4741; BRAND=0xff4a4741
+  CREST="$HOME/.config/yorha/appearance/yorha-icon-light.png"
+fi
+
 # Transparent bar: no fill, no border, so the items float directly on the
 # wallpaper. 0x00000000 is fully transparent (the alpha is the leading byte).
 # Contrast still holds — ink labels on the parchment wallpaper.
@@ -17,7 +27,7 @@ sketchybar --bar height=32 position=top padding_left=12 padding_right=12 \
 
 sketchybar --default label.font="Cascadia Code:Regular:11.0" \
                      icon.font="Cascadia Code NF:Regular:12.0" \
-                     label.color=$INK icon.color=$INK \
+                     label.color=$TEXT icon.color=$TEXT \
                      padding_left=6 padding_right=6
 
 # YoRHa crest, left of the wordmark. The PNG is pre-tinted to INK and rendered
@@ -37,16 +47,18 @@ sketchybar --default label.font="Cascadia Code:Regular:11.0" \
 sketchybar --add item yorha_icon left \
            --set yorha_icon background.drawing=on \
                             background.color=0x00000000 \
-                            background.image="$HOME/.config/sketchybar/yorha-icon.png" \
+                            background.image="$CREST" \
                             background.image.scale=0.5 \
                             background.image.drawing=on \
                             width=22 padding_left=0 padding_right=0
 
 sketchybar --add item yorha left \
-           --set yorha label="YoRHa" label.font="Cascadia Code:Bold:11.0" padding_left=0
+           --set yorha label="YoRHa" label.font="Cascadia Code:Bold:11.0" \
+                       label.color=$BRAND padding_left=0
 
 sketchybar --add item clock right \
-           --set clock update_freq=10 script="sketchybar --set clock label=\"\$(date '+%H.%M')\""
+           --set clock update_freq=10 label.color=$TEXT \
+                       script="sketchybar --set clock label=\"\$(date '+%H.%M')\""
 
 # Date, left of the clock. This replaced a CPU readout that could never agree
 # with the HUD's "Processor Load": identical formula, but sampled at a different
@@ -57,7 +69,7 @@ sketchybar --add item clock right \
 sketchybar --add item date right \
            --set date update_freq=60 \
                       script="sketchybar --set date label=\"\$(date '+%a %d %b' | tr '[:lower:]' '[:upper:]')\"" \
-                      label.color=$INK
+                      label.color=$TEXT
 
 sketchybar --update
 
@@ -74,3 +86,4 @@ if [ ! -f "$ENTRY" ]; then
   sleep 0.7
 fi
 sketchybar --bar y_offset=0
+"$HOME/.config/yorha/bin/apply-appearance.sh" "$MODE" --force >/dev/null 2>&1 || true
