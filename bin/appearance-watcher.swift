@@ -39,14 +39,50 @@ func runCoordinator(path: String, mode: String) {
 }
 
 final class AppearanceWatcher {
-    private let coordinatorPath: String
+    private let styleProvider: () -> String?
+    private let applyMode: (String) -> Void
     private var themeObserver: NSObjectProtocol?
     private var wakeObserver: NSObjectProtocol?
     private var pendingApply: DispatchWorkItem?
 
     init(coordinatorPath: String) {
-        self.coordinatorPath = coordinatorPath
+        styleProvider = {
+            UserDefaults.standard.string(forKey: "AppleInterfaceStyle")
+        }
+        applyMode = { [coordinatorPath] mode in
+            DispatchQueue.global(qos: .utility).async {
+                runCoordinator(path: coordinatorPath, mode: mode)
+            }
+        }
+        installObservers()
+    }
 
+    #if TESTING
+    init(
+        coordinatorPath: String,
+        styleProvider: @escaping () -> String?,
+        applyMode: @escaping (String) -> Void
+    ) {
+        _ = coordinatorPath
+        self.styleProvider = styleProvider
+        self.applyMode = applyMode
+        installObservers()
+    }
+
+    func applyStartupForTesting() {
+        scheduleApply(after: 0)
+    }
+
+    func appearanceDidChangeForTesting() {
+        scheduleApply(after: 0.15)
+    }
+
+    func didWakeForTesting() {
+        scheduleApply(after: 0)
+    }
+    #endif
+
+    private func installObservers() {
         themeObserver = DistributedNotificationCenter.default().addObserver(
             forName: Notification.Name("AppleInterfaceThemeChangedNotification"),
             object: nil,
@@ -84,12 +120,7 @@ final class AppearanceWatcher {
 
     private func applyCurrentAppearance() {
         pendingApply = nil
-        let mode = resolveAppearance(
-            style: UserDefaults.standard.string(forKey: "AppleInterfaceStyle")
-        )
-        DispatchQueue.global(qos: .utility).async { [coordinatorPath] in
-            runCoordinator(path: coordinatorPath, mode: mode)
-        }
+        applyMode(resolveAppearance(style: styleProvider()))
     }
 }
 
