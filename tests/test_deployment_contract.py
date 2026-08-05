@@ -756,7 +756,22 @@ exec /bin/mv "$@"
         self.assert_no_plist_temps(context)
 
     def test_missing_or_corrupt_loaded_state_fails_before_mutation(self):
-        for state in (None, "corrupt\n"):
+        invalid_states = (
+            None,
+            b"corrupt\n",
+            b"loaded\ncorrupt\n",
+            b"corrupt\nloaded\n",
+            b"loaded\nloaded\n",
+            b"unloaded\ncorrupt\n",
+            b"corrupt\nunloaded\n",
+            b"unloaded\nunloaded\n",
+            b"loaded",
+            b"unloaded",
+            b"loaded \n",
+            b" unloaded\n",
+            b"unloaded\t\n",
+        )
+        for state in invalid_states:
             with self.subTest(state=state):
                 context = self.make_restore_sandbox()
                 self.deploy_appearance_fixture(context)
@@ -764,15 +779,41 @@ exec /bin/mv "$@"
                 if state is None:
                     state_path.unlink()
                 else:
-                    state_path.write_text(state)
+                    state_path.write_bytes(state)
                 result = self.run_restore(context)
                 self.assertEqual(result.returncode, 65)
                 self.assertEqual(context["plist"].read_text(), "deployed YoRHa plist\n")
                 self.assertTrue(context["job_state"].is_file())
                 self.assertTrue(all(path.exists() for path in context["runtime_paths"]))
+                calls = context["launchctl_log"].read_text().splitlines()
+                self.assertFalse(any("bootout" in call or "bootstrap" in call
+                                     for call in calls))
+                self.assertFalse(context["wallpaper_state"].exists())
                 self.assertIn("invalid appearance watcher state", result.stderr)
                 self.assertNotIn("Restore complete.", result.stdout)
                 self.assert_no_plist_temps(context)
+
+    def test_plan_timeout_diagnostic_executes_valid_applescript(self):
+        plan = (ROOT / "docs/superpowers/plans/2026-08-05-system-appearance-theming.md")
+        diagnostic = next(line.strip() for line in plan.read_text().splitlines()
+                          if line.strip().startswith('echo "desktop count:'))
+        with tempfile.TemporaryDirectory() as raw:
+            fakebin = Path(raw)
+            self.write_double(fakebin, "osascript", r'''
+[ "$1" = "-e" ] || exit 80
+[ "$2" = 'tell application "System Events" to count every desktop' ] || {
+  printf 'unexpected AppleScript: <%s>\n' "$2" >&2
+  exit 81
+}
+printf '1\n'
+''')
+            env = os.environ.copy()
+            env["PATH"] = f"{fakebin}:/usr/bin:/bin"
+            result = subprocess.run(["/bin/bash", "-c", diagnostic], env=env,
+                                    text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, "desktop count: 1\n")
 
     def test_copy_failure_keeps_deployed_state_and_cleans_partial_temp(self):
         context = self.make_restore_sandbox()

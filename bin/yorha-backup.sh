@@ -114,9 +114,9 @@ if [ ! -f "$PLIST_STATE_FILE" ]; then
   echo "error: invalid appearance watcher state: missing $PLIST_STATE_FILE" >&2
   exit 65
 fi
-if grep -qxF loaded "$PLIST_STATE_FILE"; then
+if cmp -s "$PLIST_STATE_FILE" <(printf 'loaded\n'); then
   ORIGINAL_APPEARANCE_STATE=loaded
-elif grep -qxF unloaded "$PLIST_STATE_FILE"; then
+elif cmp -s "$PLIST_STATE_FILE" <(printf 'unloaded\n'); then
   ORIGINAL_APPEARANCE_STATE=unloaded
 else
   echo "error: invalid appearance watcher state in $PLIST_STATE_FILE" >&2

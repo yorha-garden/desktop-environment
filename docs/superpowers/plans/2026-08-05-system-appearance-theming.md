@@ -998,7 +998,7 @@ wait_for_all_desktops_to_use_runtime_heic() {
     sleep 0.25
   done
   echo "timed out waiting for every desktop to adopt $RUNTIME_HEIC" >&2
-  echo "desktop count: $(osascript -e 'tell application \"System Events\" to count every desktop')" >&2
+  echo "desktop count: $(osascript -e 'tell application "System Events" to count every desktop')" >&2
   echo "last reported wallpaper paths:" >&2
   cat "$pending" >&2 2>/dev/null || true
   return 1
