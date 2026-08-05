@@ -31,7 +31,8 @@ export const className = `
   bottom: 28px; right: 30px;
   pointer-events: none;
   font-family: 'Cascadia Code', monospace;
-  color: #4A4741;
+  color: var(--yorha-text, #4A4741);
+  transition: color 200ms ease;
 `;
 
 // MEASURED in the live renderer, not derived. The panel is content-box, so its
@@ -90,18 +91,19 @@ export const render = ({ output }) => {
   return (
     <div className="pod pod-enter">
       <style>{`
-        .pod { width: 300px; border: 1px solid rgba(74,71,65,.45);
-               background: rgba(214,210,193,.5); padding: 13px 15px; position: relative; }
+        .pod { width: 300px; border: 1px solid var(--yorha-ornament, #4A4741);
+               background: var(--yorha-panel, rgba(214,210,193,.5)); padding: 13px 15px; position: relative;
+               transition: background 200ms ease, border 200ms ease; }
         .pod::before, .pod::after { content: ''; position: absolute; width: 8px; height: 8px;
-               border: 1px solid #4A4741; }
+               border: 1px solid var(--yorha-ornament, #4A4741); transition: border 200ms ease; }
         .pod::before { top: -1px; left: -1px; border-right: 0; border-bottom: 0; }
         .pod::after  { bottom: -1px; right: -1px; border-left: 0; border-top: 0; }
         .pod-hd { font-size: 8px; letter-spacing: .3em; text-transform: uppercase;
                   opacity: .6; padding-bottom: 7px; margin-bottom: 8px;
-                  border-bottom: 1px solid rgba(74,71,65,.3);
+                  border-bottom: 1px solid var(--yorha-ornament, #4A4741);
                   display: flex; justify-content: space-between; align-items: baseline; }
         .pod-src { font-size: 7px; letter-spacing: .18em; opacity: .55; }
-        .pod-src.live { color: #BC9A5A; opacity: .9; }
+        .pod-src.live { color: var(--yorha-accent, #BC9A5A); opacity: .9; transition: color 200ms ease; }
         /* wrapper clips; base state is fully revealed so a typewriter that never
            starts cannot leave the message invisible (that bug shipped once) */
         .pod-msg { font-size: 11px; line-height: 1.7; letter-spacing: .03em;

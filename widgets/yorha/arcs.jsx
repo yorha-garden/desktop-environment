@@ -23,6 +23,8 @@ export const refreshFrequency = false;
 export const className = `
   left: 0; top: 0; width: 100%; height: 100%;
   pointer-events: none; overflow: hidden;
+  color: var(--yorha-ornament, #4A4741);
+  transition: color 200ms ease;
 `;
 
 // verbatim from CircleLine (428x432 box); pathLength=100 normalizes the dash math
@@ -39,7 +41,7 @@ const LINES = [
 const arc = (d, cls) => (
   <div className={"arc-breathe " + cls} style={{ position: "absolute", left: 0, top: 0, width: 428, height: 432 }}>
     <svg width="428" height="432" viewBox="0 0 428 432" fill="none" style={{ overflow: "visible" }}>
-      <path d={d} pathLength="100" stroke="#4A4741" strokeOpacity="0.3" strokeWidth="2"
+      <path d={d} pathLength="100" stroke="currentColor" strokeOpacity="0.3" strokeWidth="2"
             className={"arc-draw " + cls} />
     </svg>
   </div>
@@ -52,7 +54,7 @@ const threeLines = () => (
            style={{ position: "absolute", left: 0, top: 0, width: 707, height: 714 }}>
         <svg width="707" height="714" viewBox="0 0 707 714" fill="none" style={{ overflow: "visible" }}>
           <line x1={l.x1} y1={l.y1} x2={l.x2} y2={l.y2} pathLength="100"
-                stroke="#4A4741" strokeOpacity="0.3" strokeWidth="2"
+                stroke="currentColor" strokeOpacity="0.3" strokeWidth="2"
                 className={"arc-draw arc-w" + i} />
         </svg>
       </div>
@@ -63,7 +65,7 @@ const threeLines = () => (
 export const render = () => (
   <div>
     <style>{`
-      .arc-corner { position: absolute; width: 428px; height: 432px; }
+      .arc-corner { position: absolute; width: 428px; height: 432px; color: var(--yorha-ornament, #4A4741); transition: color 200ms ease; }
       .arc-tl { top: 0; left: 0; }
       .arc-br { bottom: 0; right: 0; transform: rotate(180deg); }
 
@@ -102,9 +104,9 @@ export const render = () => (
 
       /* ThreeLine's corner offsets, from ornament.tsx: top-left at origin,
          bottom-right shifted -bottom-16 -right-24 (Tailwind: 64px, 96px) */
-      .arc-lines-tl { position: absolute; top: 0; left: 0; width: 707px; height: 714px; }
+      .arc-lines-tl { position: absolute; top: 0; left: 0; width: 707px; height: 714px; color: var(--yorha-ornament, #4A4741); transition: color 200ms ease; }
       .arc-lines-br { position: absolute; bottom: -64px; right: -96px; width: 707px; height: 714px;
-                      transform: rotate(180deg); }
+                      transform: rotate(180deg); color: var(--yorha-ornament, #4A4741); transition: color 200ms ease; }
 
       @media (prefers-reduced-motion: reduce) {
         .arc-breathe { animation: none; }

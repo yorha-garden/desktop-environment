@@ -21,7 +21,8 @@ export const className = `
   left: 0; top: 0; width: 100%; height: 100%;
   pointer-events: none;
   font-family: 'Cascadia Code', monospace;
-  color: #4A4741;
+  color: var(--yorha-text, #4A4741);
+  transition: color 200ms ease;
 `;
 
 // Module state survives between renders (Übersicht re-evaluates the module only
@@ -75,16 +76,17 @@ export const render = ({ output }) => {
         .tr { top: 60px; right: 30px; text-align: right; }
         .bl { bottom: 28px; left: 30px; }
         .k { font-size: 8.5px; letter-spacing: .3em; text-transform: uppercase; opacity: .55; }
-        .v { font-size: 19px; letter-spacing: .09em; margin-top: 2px; }
+        .v { font-size: 19px; letter-spacing: .09em; margin-top: 2px;
+             color: var(--yorha-value, #4A4741); transition: color 200ms ease; }
         .v small { font-size: 10px; opacity: .6; }
         .sub { margin-top: 14px; }
-        .alert { color: #BB3B36; }
-        .meter { width: 126px; height: 3px; background: rgba(74,71,65,.18); margin-top: 8px;
-                 position: relative; overflow: hidden; }
+        .alert { color: var(--yorha-alert, #BB3B36); }
+        .meter { width: 126px; height: 3px; background: var(--yorha-track, rgba(74,71,65,.18)); margin-top: 8px;
+                 position: relative; overflow: hidden; transition: background 200ms ease; }
         .tr .meter { margin-left: auto; }
-        .meter i { position: absolute; top: 0; bottom: 0; left: 0; background: #4A4741;
-                   transition: width .8s ease; }
-        .meter i.alert { background: #BB3B36; }
+        .meter i { position: absolute; top: 0; bottom: 0; left: 0; background: var(--yorha-value, #4A4741);
+                   transition: width .8s ease, background 200ms ease; }
+        .meter i.alert { background: var(--yorha-alert, #BB3B36); }
         .hud-enter { opacity: 0; animation: bootIn .55s cubic-bezier(.34,1.56,.64,1) both; }
         @keyframes bootIn {
           from { opacity: 0; transform: translateY(9px); }

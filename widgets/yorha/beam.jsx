@@ -17,19 +17,20 @@ export const className = `
 export const render = () => (
   <div>
     <style>{`
-      .beam { position: absolute; left: 0; right: 0; height: 14vh; top: 0;
+      .beam { --yorha-beam-rgb:74,71,65; color: var(--yorha-ornament, #4A4741); position: absolute; left: 0; right: 0; height: 14vh; top: 0;
               background: linear-gradient(to bottom,
-                rgba(74,71,65,0) 0%,
-                rgba(74,71,65,.05) 45%,
-                rgba(214,210,193,.07) 55%,
-                rgba(74,71,65,0) 100%);
+                rgba(var(--yorha-beam-rgb),0) 0%,
+                rgba(var(--yorha-beam-rgb),.05) 45%,
+                rgba(var(--yorha-beam-rgb),.07) 55%,
+                rgba(var(--yorha-beam-rgb),0) 100%);
               animation: sweep 11s linear infinite;
-              will-change: transform; }
+              will-change: transform; transition: background 200ms ease; }
       @keyframes sweep {
         from { transform: translateY(-16vh); }
         to   { transform: translateY(102vh); }
       }
       @media (prefers-reduced-motion: reduce) { .beam { animation: none; opacity: 0; } }
+      @media (prefers-color-scheme: dark) { .beam { --yorha-beam-rgb:110,123,139; } }
     `}</style>
     <div className="beam" />
   </div>
