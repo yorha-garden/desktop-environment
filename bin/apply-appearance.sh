@@ -31,6 +31,8 @@ LIGHT_CREST="$ROOT/yorha-icon-light.png"
 DARK_CREST="$ROOT/yorha-icon-dark.png"
 SKETCHYBAR="${YORHA_SKETCHYBAR_BIN:-sketchybar}"
 LOCK_OWNED=0
+LOCK_ACQUISITION_PENDING=0
+PENDING_SIGNAL_STATUS=0
 TEMP_STATE=""
 SKETCHYBAR_PID=""
 
@@ -55,6 +57,10 @@ terminate_sketchybar() {
 
 on_signal() {
   status="$1"
+  if [ "$LOCK_ACQUISITION_PENDING" -eq 1 ]; then
+    PENDING_SIGNAL_STATUS="$status"
+    return
+  fi
   trap - EXIT INT TERM
   terminate_sketchybar
   cleanup
@@ -84,7 +90,18 @@ if [ ! -f "$CREST" ]; then
 fi
 
 attempt=0
-until mkdir "$LOCK" 2>/dev/null; do
+while :; do
+  LOCK_ACQUISITION_PENDING=1
+  mkdir "$LOCK" 2>/dev/null
+  mkdir_status=$?
+  if [ "$mkdir_status" -eq 0 ]; then
+    LOCK_OWNED=1
+  fi
+  LOCK_ACQUISITION_PENDING=0
+  if [ "$PENDING_SIGNAL_STATUS" -ne 0 ]; then
+    on_signal "$PENDING_SIGNAL_STATUS"
+  fi
+  [ "$mkdir_status" -ne 0 ] || break
   attempt=$((attempt + 1))
   [ "$attempt" -lt 100 ] || {
     echo "appearance lock timeout" >&2
@@ -92,7 +109,6 @@ until mkdir "$LOCK" 2>/dev/null; do
   }
   sleep 0.1
 done
-LOCK_OWNED=1
 
 if [ -f "$STATE" ] && [ "$(<"$STATE")" = "$MODE" ] && [ "$FORCE" != "--force" ]; then
   exit 0

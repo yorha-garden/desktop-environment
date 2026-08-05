@@ -168,6 +168,43 @@ class ApplyAppearanceTests(unittest.TestCase):
         self.assertTrue(self.lock.is_dir())
         self.assertEqual(len(sleep_log.read_text().splitlines()), 99)
 
+    def write_signaling_mkdir(self, exit_code):
+        fake_bin = Path(self.tempdir.name) / f"fake-mkdir-{exit_code}"
+        fake_bin.mkdir()
+        mkdir_body = "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                'if [ "$1" = "$YORHA_TEST_LOCK_PATH" ]; then',
+                '  /bin/mkdir "$1" 2>/dev/null || true',
+                '  kill -INT "$PPID"',
+                f"  exit {exit_code}",
+                "fi",
+                'exec /bin/mkdir "$@"',
+                "",
+            ]
+        )
+        (fake_bin / "mkdir").write_text(mkdir_body)
+        (fake_bin / "mkdir").chmod(0o755)
+        return {
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "YORHA_TEST_LOCK_PATH": str(self.lock),
+        }
+
+    def test_signal_after_successful_mkdir_before_ownership_cleans_our_lock(self):
+        result = self.run_apply("dark", extra_env=self.write_signaling_mkdir(exit_code=0))
+        self.assertEqual(result.returncode, 130)
+        self.assertFalse(self.lock.exists())
+        self.assertFalse(self.state.exists())
+        self.assertEqual(self.call_argvs(), [])
+
+    def test_signal_after_failed_mkdir_preserves_foreign_lock(self):
+        self.lock.mkdir()
+        result = self.run_apply("dark", extra_env=self.write_signaling_mkdir(exit_code=1))
+        self.assertEqual(result.returncode, 130)
+        self.assertTrue(self.lock.is_dir())
+        self.assertFalse(self.state.exists())
+        self.assertEqual(self.call_argvs(), [])
+
     def test_printf_failure_removes_temporary_marker_and_preserves_prior_mode(self):
         self.assertEqual(self.run_apply("light").returncode, 0)
         bash_env = Path(self.tempdir.name) / "fail-printf.bash"
@@ -219,6 +256,16 @@ class ApplyAppearanceTests(unittest.TestCase):
             self.assertFalse(self.lock.exists())
             self.assertFalse(self.state.exists())
             self.assertEqual(list(self.appearance_root.glob(".last-successful-mode.*")), [])
+            child_pid = int(child_pid_file.read_text().strip())
+            child_deadline = time.monotonic() + 1
+            while time.monotonic() < child_deadline:
+                try:
+                    os.kill(child_pid, 0)
+                except ProcessLookupError:
+                    break
+                time.sleep(0.01)
+            else:
+                self.fail(f"SketchyBar child {child_pid} survived the parent-only signal")
         finally:
             if process.poll() is None:
                 process.kill()
