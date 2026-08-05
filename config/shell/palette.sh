@@ -8,6 +8,8 @@ export YORHA_ALERT=BB3B36
 export YORHA_AMBER=BC9A5A
 export YORHA_VOID=16161A
 export YORHA_VOID_TEXT=D8D4C4
+export YORHA_BRIGHT=EFEBDB
+export YORHA_STEEL=6E7B8B
 
 # --- Extended tokens -------------------------------------------------------
 # These were originally hardcoded straight into consumers, which defeats the point

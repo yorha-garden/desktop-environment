@@ -1,55 +1,106 @@
 #!/usr/bin/env bash
-# Rasterize assets/wallpaper.svg -> assets/wallpaper-<hash>.png and set it as the desktop.
-#
-# WHY THE HASH IN THE FILENAME: macOS caches the desktop picture BY PATH. Setting
-# the same path again after editing the file is a no-op — the old rendition keeps
-# showing, with no error anywhere. Several wallpaper edits appeared to "not apply"
-# for exactly this reason. A content-derived filename means every change produces a
-# path the window server has never cached.
-#
-# The PNGs are gitignored (assets/wallpaper*.png); the SVG is the source of truth.
+# Rasterize the light and dark wallpaper sources to content-addressed PNGs.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SRC="$REPO/assets/wallpaper.svg"
 CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 
-[ -f "$SRC" ]    || { echo "missing source: $SRC" >&2; exit 1; }
-[ -x "$CHROME" ] || { echo "Google Chrome not found — it is the rasterizer" >&2; exit 1; }
+source_for() {
+  case "$1" in
+    light) echo "$REPO/assets/wallpaper.svg" ;;
+    dark) echo "$REPO/assets/wallpaper-dark.svg" ;;
+    *) return 64 ;;
+  esac
+}
 
-HASH="$(shasum -a 256 "$SRC" | cut -c1-10)"
-OUT="$REPO/assets/wallpaper-$HASH.png"
+output_for() {
+  local mode="$1" src hash
+  src="$(source_for "$mode")" || return
+  hash="$(shasum -a 256 "$src" | cut -c1-10)"
+  echo "$REPO/assets/wallpaper-$mode-$hash.png"
+}
 
-if [ -f "$OUT" ]; then
-  echo "  unchanged (hash $HASH) — reusing existing raster"
-else
-  "$CHROME" --headless=new --disable-gpu --hide-scrollbars --force-color-profile=srgb \
-    --screenshot="$OUT" --window-size=5120,2880 "file://$SRC" >/dev/null 2>&1
+validate_raster() {
+  local out="$1" width height
+  width="$(sips -g pixelWidth "$out" | awk '/pixelWidth/{print $2}')"
+  height="$(sips -g pixelHeight "$out" | awk '/pixelHeight/{print $2}')"
+  echo "  rendered ${width}x${height}  ($(basename "$out"))"
+  [ "${width:-0}" -ge 2560 ] || {
+    echo "  WARNING: viewport was clamped; wallpaper is lower-resolution than intended" >&2
+  }
+}
 
-  # Chrome silently clamps oversized headless viewports on some displays. Verify
-  # rather than shipping a stretched wallpaper.
-  W=$(sips -g pixelWidth  "$OUT" | awk '/pixelWidth/{print $2}')
-  H=$(sips -g pixelHeight "$OUT" | awk '/pixelHeight/{print $2}')
-  echo "  rendered ${W}x${H}  (hash $HASH)"
-  [ "${W:-0}" -lt 2560 ] && echo "  WARNING: viewport was clamped; wallpaper is lower-resolution than intended" >&2
-fi
+render() {
+  local mode="$1" src out
+  src="$(source_for "$mode")" || return
+  [ -f "$src" ] || { echo "missing source: $src" >&2; return 1; }
+  out="$(output_for "$mode")"
 
-# Bind the path as an argv value. Splicing it into AppleScript source would let a
-# path containing a double quote break out of the string literal.
-osascript - "$OUT" <<'AS'
+  if [ -f "$out" ]; then
+    echo "  unchanged — reusing $(basename "$out")"
+  else
+    [ -x "$CHROME" ] || { echo "Google Chrome not found — it is the rasterizer" >&2; return 1; }
+    "$CHROME" --headless=new --disable-gpu --hide-scrollbars --force-color-profile=srgb \
+      --screenshot="$out" --window-size=5120,2880 "file://$src" >/dev/null 2>&1
+  fi
+  validate_raster "$out"
+}
+
+prune_mode() {
+  local mode="$1" current
+  current="$(basename "$(output_for "$mode")")"
+  find "$REPO/assets" -maxdepth 1 -name "wallpaper-$mode-*.png" ! -name "$current" -delete 2>/dev/null || true
+}
+
+effective_mode() {
+  if [ "$(defaults read -g AppleInterfaceStyle 2>/dev/null || true)" = Dark ]; then
+    echo dark
+  else
+    echo light
+  fi
+}
+
+apply_wallpaper() {
+  local mode="$1" out
+  out="$(output_for "$mode")"
+  osascript - "$out" <<'AS'
 on run argv
   tell application "System Events" to set picture of every desktop to POSIX file (item 1 of argv)
 end run
 AS
+  killall WallpaperAgent 2>/dev/null || true
+  echo "  wallpaper set: $out"
+}
 
-# On macOS 26 the wallpaper is owned by WallpaperAgent, and the AppleScript set
-# alone does not always make it re-read: System Events kept reporting a path that
-# had already been deleted. Restarting the agent forces it. It relaunches on
-# demand, so this is safe and the desktop does not flicker.
-killall WallpaperAgent 2>/dev/null || true
-
-# Drop superseded rasters so assets/ does not accumulate 10 MB files.
-find "$REPO/assets" -maxdepth 1 -name 'wallpaper-*.png' ! -name "$(basename "$OUT")" -delete 2>/dev/null || true
-rm -f "$REPO/assets/wallpaper.png"   # legacy un-hashed name
-
-echo "  wallpaper set: $OUT"
+case "$#" in
+  0)
+    render light
+    render dark
+    apply_wallpaper "$(effective_mode)"
+    prune_mode light
+    prune_mode dark
+    rm -f "$REPO/assets/wallpaper.png"
+    ;;
+  1)
+    if [ "$1" = "--render-only" ]; then
+      render light
+      render dark
+    else
+      echo "usage: $0 [--render-only | --print-path light|dark]" >&2
+      exit 64
+    fi
+    ;;
+  2)
+    if [ "$1" = "--print-path" ]; then
+      source_for "$2" >/dev/null || { echo "mode must be light or dark" >&2; exit 64; }
+      output_for "$2"
+    else
+      echo "usage: $0 [--render-only | --print-path light|dark]" >&2
+      exit 64
+    fi
+    ;;
+  *)
+    echo "usage: $0 [--render-only | --print-path light|dark]" >&2
+    exit 64
+    ;;
+esac
