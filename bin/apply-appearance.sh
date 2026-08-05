@@ -27,7 +27,6 @@ esac
 ROOT="${YORHA_APPEARANCE_ROOT:-$HOME/.config/yorha/appearance}"
 STATE="$ROOT/last-successful-mode"
 LOCK="$ROOT/apply.lock"
-LOCK_OWNER="$LOCK/owner"
 LIGHT_CREST="$ROOT/yorha-icon-light.png"
 DARK_CREST="$ROOT/yorha-icon-dark.png"
 SKETCHYBAR="${YORHA_SKETCHYBAR_BIN:-sketchybar}"
@@ -41,7 +40,10 @@ LOCK_OWNER_START=""
 LOCK_OWNER_TOKEN=""
 LOCK_START_IDENTITY=""
 LOCK_TOKEN="$$.$(date +%s).$RANDOM"
-LOCK_METADATA_TEMP=""
+LOCK_CANDIDATE="$ROOT/.apply.lock.candidate.$LOCK_TOKEN"
+LOCK_GUARD="$ROOT/.apply.lock.guard"
+SHLOCK="${YORHA_SHLOCK_BIN:-/usr/bin/shlock}"
+GUARD_OWNED=0
 LOCK_STALE_GRACE_SECONDS=5
 TAB="$(printf '\t')"
 
@@ -51,11 +53,15 @@ process_start_identity() {
 }
 
 read_lock_owner() {
-  owner_file="$1/owner"
+  if [ -d "$1" ]; then
+    owner_file="$1/owner"
+  else
+    owner_file="$1"
+  fi
   LOCK_OWNER_PID=""
   LOCK_OWNER_START=""
   LOCK_OWNER_TOKEN=""
-  [ -f "$owner_file" ] || return 1
+  [ ! -L "$owner_file" ] && [ -f "$owner_file" ] || return 1
 
   owner_line_count=0
   while IFS= read -r owner_line || [ -n "$owner_line" ]; do
@@ -76,12 +82,6 @@ read_lock_owner() {
   esac
 }
 
-lock_owner_is_active() {
-  read_lock_owner "$1" || return 1
-  current_start="$(process_start_identity "$LOCK_OWNER_PID")"
-  [ -n "$current_start" ] && [ "$current_start" = "$LOCK_OWNER_START" ]
-}
-
 lock_is_stale() {
   lock_modified="$(stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null)"
   case "$lock_modified" in
@@ -91,50 +91,74 @@ lock_is_stale() {
   [ $((lock_now - lock_modified)) -ge "$LOCK_STALE_GRACE_SECONDS" ]
 }
 
+guard_is_owned_by_self() {
+  [ ! -L "$LOCK_GUARD" ] && [ -f "$LOCK_GUARD" ] || return 1
+  guard_pid="$(tr -d '[:space:]' < "$LOCK_GUARD")"
+  [ "$guard_pid" = "$$" ]
+}
+
+acquire_reclaimer_guard() {
+  if "$SHLOCK" -f "$LOCK_GUARD" -p "$$"; then
+    GUARD_OWNED=1
+    return 0
+  fi
+  return 1
+}
+
+release_reclaimer_guard() {
+  if [ "$GUARD_OWNED" -eq 1 ]; then
+    guard_is_owned_by_self && rm -f "$LOCK_GUARD"
+    GUARD_OWNED=0
+  fi
+}
+
 reclaim_stale_lock() {
-  [ -d "$LOCK" ] || return 0
+  [ -e "$LOCK" ] || [ -L "$LOCK" ] || return 0
   if read_lock_owner "$LOCK"; then
     current_start="$(process_start_identity "$LOCK_OWNER_PID")"
     if [ -n "$current_start" ] && [ "$current_start" = "$LOCK_OWNER_START" ]; then
       return 1
     fi
   else
-    # An owner record is published immediately after mkdir. Only an ownerless or
-    # malformed directory needs grace so a creator at that boundary can finish.
+    # Only malformed legacy residue needs grace; current publishers expose a
+    # complete owner record in the same atomic link that creates LOCK.
     lock_is_stale "$LOCK" || return 1
   fi
 
-  reclaim_claim="$LOCK/reclaim"
-  mkdir "$reclaim_claim" 2>/dev/null || return 1
-  if lock_owner_is_active "$LOCK"; then
-    rmdir "$reclaim_claim" 2>/dev/null || true
+  # Every compliant publisher, reclaimer, and cleanup holds LOCK_GUARD here.
+  # A directory can only be residue from the prior lock format.
+  if [ -d "$LOCK" ]; then
+    reclaim_tombstone="$LOCK.reclaim.$LOCK_TOKEN"
+    if mv "$LOCK" "$reclaim_tombstone" 2>/dev/null; then
+      rm -rf "$reclaim_tombstone"
+      return 0
+    fi
     return 1
   fi
-
-  reclaim_tombstone="$LOCK.reclaim.$LOCK_TOKEN"
-  if mv "$LOCK" "$reclaim_tombstone" 2>/dev/null; then
-    rm -rf "$reclaim_tombstone"
-    return 0
-  fi
-  rmdir "$reclaim_claim" 2>/dev/null || true
-  return 1
+  rm -f "$LOCK"
 }
 
-write_lock_owner() {
-  LOCK_METADATA_TEMP="$LOCK/.owner.$LOCK_TOKEN"
-  printf 'pid\t%s\nstart\t%s\ntoken\t%s\n' \
-    "$$" "$LOCK_START_IDENTITY" "$LOCK_TOKEN" > "$LOCK_METADATA_TEMP" || return 1
-  if [ -d "$LOCK/reclaim" ]; then
-    rm -f "$LOCK_METADATA_TEMP"
-    LOCK_METADATA_TEMP=""
-    return 1
-  fi
-  mv "$LOCK_METADATA_TEMP" "$LOCK_OWNER" || return 1
-  LOCK_METADATA_TEMP=""
+prepare_lock_candidate() {
+  (umask 077
+    set -C
+    printf 'pid\t%s\nstart\t%s\ntoken\t%s\n' \
+      "$$" "$LOCK_START_IDENTITY" "$LOCK_TOKEN" > "$LOCK_CANDIDATE"
+  )
+}
+
+publish_lock_candidate() {
+  # POSIX ln treats an existing directory as a destination directory. Test the
+  # public pathname while holding LOCK_GUARD so legacy directory locks cannot be
+  # mistaken for a successful publication inside that directory.
+  [ ! -e "$LOCK" ] && [ ! -L "$LOCK" ] || return 1
+  ln "$LOCK_CANDIDATE" "$LOCK" 2>/dev/null
 }
 
 lock_is_owned_by_self() {
-  read_lock_owner "$LOCK" || return 1
+  [ ! -L "$LOCK" ] && [ -f "$LOCK" ] \
+    && [ -f "$LOCK_CANDIDATE" ] && [ "$LOCK" -ef "$LOCK_CANDIDATE" ] \
+    || return 1
+  read_lock_owner "$LOCK_CANDIDATE" || return 1
   [ "$LOCK_OWNER_PID" = "$$" ] \
     && [ "$LOCK_OWNER_START" = "$LOCK_START_IDENTITY" ] \
     && [ "$LOCK_OWNER_TOKEN" = "$LOCK_TOKEN" ]
@@ -146,14 +170,20 @@ cleanup() {
     TEMP_STATE=""
   fi
   if [ "$LOCK_OWNED" -eq 1 ]; then
-    if lock_is_owned_by_self; then
-      rm -f "$LOCK_OWNER"
-    elif [ ! -e "$LOCK_OWNER" ] && [ -n "$LOCK_METADATA_TEMP" ]; then
-      rm -f "$LOCK_METADATA_TEMP"
+    cleanup_guard_attempt=0
+    while [ "$GUARD_OWNED" -ne 1 ] && ! acquire_reclaimer_guard; do
+      cleanup_guard_attempt=$((cleanup_guard_attempt + 1))
+      [ "$cleanup_guard_attempt" -lt 100 ] || break
+      /bin/sleep 0.01
+    done
+    if [ "$GUARD_OWNED" -eq 1 ]; then
+      lock_is_owned_by_self && rm -f "$LOCK"
+      release_reclaimer_guard
     fi
-    rmdir "$LOCK" 2>/dev/null || true
     LOCK_OWNED=0
   fi
+  release_reclaimer_guard
+  rm -f "$LOCK_CANDIDATE"
 }
 
 terminate_sketchybar() {
@@ -205,27 +235,36 @@ if [ -z "$LOCK_START_IDENTITY" ]; then
   echo "could not determine appearance lock owner identity" >&2
   exit 1
 fi
+if [ ! -x "$SHLOCK" ]; then
+  echo "missing atomic lock helper: $SHLOCK" >&2
+  exit 1
+fi
+if ! prepare_lock_candidate; then
+  echo "could not prepare appearance lock ownership" >&2
+  exit 1
+fi
 
 attempt=0
 while :; do
   LOCK_ACQUISITION_PENDING=1
-  lock_metadata_status=0
-  mkdir "$LOCK" 2>/dev/null
-  mkdir_status=$?
-  if [ "$mkdir_status" -eq 0 ]; then
-    LOCK_OWNED=1
-    write_lock_owner || lock_metadata_status=$?
+  publish_status=1
+  if acquire_reclaimer_guard; then
+    publish_lock_candidate
+    publish_status=$?
+    if [ "$publish_status" -ne 0 ] && reclaim_stale_lock; then
+      publish_lock_candidate
+      publish_status=$?
+    fi
+    if [ "$publish_status" -eq 0 ]; then
+      LOCK_OWNED=1
+    fi
+    release_reclaimer_guard
   fi
   LOCK_ACQUISITION_PENDING=0
   if [ "$PENDING_SIGNAL_STATUS" -ne 0 ]; then
     on_signal "$PENDING_SIGNAL_STATUS"
   fi
-  if [ "$mkdir_status" -eq 0 ] && [ "$lock_metadata_status" -ne 0 ]; then
-    echo "could not record appearance lock ownership" >&2
-    exit "$lock_metadata_status"
-  fi
-  [ "$mkdir_status" -ne 0 ] || break
-  reclaim_stale_lock || true
+  [ "$publish_status" -ne 0 ] || break
   attempt=$((attempt + 1))
   [ "$attempt" -lt 100 ] || {
     echo "appearance lock timeout" >&2

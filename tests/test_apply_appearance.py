@@ -90,8 +90,7 @@ class ApplyAppearanceTests(unittest.TestCase):
         ).stdout.strip()
 
     def write_lock_owner(self, pid, start_identity, token="foreign-owner"):
-        self.lock.mkdir(exist_ok=True)
-        (self.lock / "owner").write_text(
+        self.lock.write_text(
             f"pid\t{pid}\nstart\t{start_identity}\ntoken\t{token}\n"
         )
 
@@ -102,6 +101,110 @@ class ApplyAppearanceTests(unittest.TestCase):
         sleep.write_text("#!/usr/bin/env bash\nexit 0\n")
         sleep.chmod(0o755)
         return {"PATH": f"{fake_bin}:{os.environ['PATH']}"}
+
+    def wait_for_path(self, path, process, timeout=3):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if path.exists():
+                return
+            if process.poll() is not None:
+                stdout, stderr = process.communicate()
+                self.fail(
+                    f"coordinator exited early ({process.returncode}): "
+                    f"stdout={stdout!r} stderr={stderr!r}"
+                )
+            time.sleep(0.01)
+        self.fail(f"timed out waiting for {path}")
+
+    def start_apply(self, mode, extra_env=None):
+        env = os.environ | {
+            "YORHA_APPEARANCE_ROOT": str(self.appearance_root),
+            "YORHA_SKETCHYBAR_BIN": str(self.sketchybar),
+            "YORHA_TEST_CALL_LOG": str(self.call_log),
+        }
+        if extra_env:
+            env.update(extra_env)
+        return subprocess.Popen(
+            [str(SCRIPT), mode], env=env, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+
+    def write_holding_sketchybar(self, light_started, release_light):
+        self.sketchybar.write_text(
+            "#!/usr/bin/env bash\n"
+            "printf '\\036' >> \"$YORHA_TEST_CALL_LOG\"\n"
+            "printf '%s\\0' \"$@\" >> \"$YORHA_TEST_CALL_LOG\"\n"
+            "case \"$*\" in\n"
+            "  *yorha-icon-light.png*)\n"
+            '    : > "$YORHA_TEST_LIGHT_STARTED"\n'
+            '    while [ ! -f "$YORHA_TEST_RELEASE_LIGHT" ]; do '
+            "/bin/sleep 0.01; done\n"
+            "    ;;\n"
+            "esac\n"
+        )
+        self.sketchybar.chmod(0o755)
+        return {
+            "YORHA_TEST_LIGHT_STARTED": str(light_started),
+            "YORHA_TEST_RELEASE_LIGHT": str(release_light),
+        }
+
+    def write_pausing_publication_tools(self, ready, release):
+        fake_bin = Path(self.tempdir.name) / "pause-publication-bin"
+        fake_bin.mkdir()
+        pause_marker = Path(self.tempdir.name) / "publication-paused-once"
+        (fake_bin / "mkdir").write_text(r'''#!/usr/bin/env bash
+if [ "$1" = "$YORHA_TEST_LOCK_PATH" ]; then
+  /bin/mkdir "$@"
+  status=$?
+  if [ "$status" -eq 0 ] && [ ! -e "$YORHA_TEST_PAUSE_MARKER" ]; then
+    : > "$YORHA_TEST_PAUSE_MARKER"
+    : > "$YORHA_TEST_PUBLICATION_READY"
+    while [ ! -e "$YORHA_TEST_PUBLICATION_RELEASE" ]; do /bin/sleep 0.01; done
+  fi
+  exit "$status"
+fi
+exec /bin/mkdir "$@"
+''')
+        (fake_bin / "ln").write_text(r'''#!/usr/bin/env bash
+destination="${!#}"
+if [ "$destination" = "$YORHA_TEST_LOCK_PATH" ] \
+    && [ ! -e "$YORHA_TEST_PAUSE_MARKER" ]; then
+  : > "$YORHA_TEST_PAUSE_MARKER"
+  : > "$YORHA_TEST_PUBLICATION_READY"
+  while [ ! -e "$YORHA_TEST_PUBLICATION_RELEASE" ]; do /bin/sleep 0.01; done
+fi
+exec /bin/ln "$@"
+''')
+        (fake_bin / "shlock").write_text(r'''#!/usr/bin/env bash
+if [ ! -e "$YORHA_TEST_PAUSE_MARKER" ]; then
+  : > "$YORHA_TEST_PAUSE_MARKER"
+  : > "$YORHA_TEST_PUBLICATION_READY"
+  while [ ! -e "$YORHA_TEST_PUBLICATION_RELEASE" ]; do /bin/sleep 0.01; done
+fi
+exec /usr/bin/shlock "$@"
+''')
+        (fake_bin / "sleep").write_text("#!/usr/bin/env bash\nexit 0\n")
+        for tool in ("mkdir", "ln", "shlock", "sleep"):
+            (fake_bin / tool).chmod(0o755)
+        return {
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "YORHA_TEST_LOCK_PATH": str(self.lock),
+            "YORHA_TEST_PAUSE_MARKER": str(pause_marker),
+            "YORHA_TEST_PUBLICATION_READY": str(ready),
+            "YORHA_TEST_PUBLICATION_RELEASE": str(release),
+            "YORHA_SHLOCK_BIN": str(fake_bin / "shlock"),
+        }
+
+    def lock_snapshot(self):
+        owner = self.lock / "owner" if self.lock.is_dir() else self.lock
+        stat = owner.stat()
+        return (stat.st_dev, stat.st_ino, owner.read_bytes())
+
+    def assert_no_internal_lock_residue(self):
+        self.assertFalse((self.appearance_root / ".apply.lock.guard").exists())
+        self.assertEqual(
+            list(self.appearance_root.glob(".apply.lock.candidate.*")), []
+        )
 
     def test_argument_count_validation_precedes_missing_asset_checks(self):
         self.light_crest.unlink()
@@ -166,7 +269,9 @@ class ApplyAppearanceTests(unittest.TestCase):
         self.assertFalse(self.state.exists())
 
     def test_existing_lock_times_out_without_invoking_sketchybar(self):
-        self.lock.mkdir()
+        self.lock.touch()
+        future = time.time() + 60
+        os.utime(self.lock, (future, future))
         fake_bin = Path(self.tempdir.name) / "fake-bin"
         fake_bin.mkdir()
         sleep_log = Path(self.tempdir.name) / "sleep-calls.log"
@@ -185,14 +290,14 @@ class ApplyAppearanceTests(unittest.TestCase):
         self.assertEqual(result.returncode, 75)
         self.assertIn("appearance lock timeout", result.stderr)
         self.assertEqual(self.call_argvs(), [])
-        self.assertTrue(self.lock.is_dir())
+        self.assertTrue(self.lock.is_file())
         self.assertEqual(len(sleep_log.read_text().splitlines()), 99)
 
     def test_active_lock_owner_is_never_reclaimed(self):
         self.write_lock_owner(os.getpid(), self.process_start_identity(os.getpid()))
         result = self.run_apply("dark", extra_env=self.fast_sleep_env())
         self.assertEqual(result.returncode, 75)
-        self.assertTrue((self.lock / "owner").is_file())
+        self.assertTrue(self.lock.is_file())
         self.assertEqual(self.call_argvs(), [])
 
     def test_dead_and_reused_pid_lock_owners_are_reclaimed(self):
@@ -202,9 +307,7 @@ class ApplyAppearanceTests(unittest.TestCase):
         )
         for pid, start_identity in cases:
             with self.subTest(pid=pid, start_identity=start_identity):
-                if self.lock.exists():
-                    (self.lock / "owner").unlink(missing_ok=True)
-                    self.lock.rmdir()
+                self.lock.unlink(missing_ok=True)
                 self.write_lock_owner(pid, start_identity)
                 result = self.run_apply("dark", extra_env=self.fast_sleep_env())
                 self.assertEqual(result.returncode, 0, result.stderr)
@@ -214,12 +317,7 @@ class ApplyAppearanceTests(unittest.TestCase):
     def test_malformed_and_ownerless_stale_locks_are_reclaimed(self):
         for owner in (None, "not owner metadata\n"):
             with self.subTest(owner=owner):
-                if self.lock.exists():
-                    (self.lock / "owner").unlink(missing_ok=True)
-                    self.lock.rmdir()
-                self.lock.mkdir()
-                if owner is not None:
-                    (self.lock / "owner").write_text(owner)
+                self.lock.write_text(owner or "")
                 os.utime(self.lock, (1, 1))
                 result = self.run_apply("light", extra_env=self.fast_sleep_env())
                 self.assertEqual(result.returncode, 0, result.stderr)
@@ -229,78 +327,180 @@ class ApplyAppearanceTests(unittest.TestCase):
     def test_cleanup_never_deletes_a_lock_reowned_by_another_process(self):
         other_pid = os.getpid()
         other_start = self.process_start_identity(other_pid)
+        foreign_candidate = Path(self.tempdir.name) / "foreign-lock-candidate"
+        foreign_candidate.write_text(
+            f"pid\t{other_pid}\nstart\t{other_start}\ntoken\tforeign-owner\n"
+        )
         self.sketchybar.write_text(
             "#!/usr/bin/env bash\n"
-            "printf 'pid\\t%s\\nstart\\t%s\\ntoken\\tforeign-owner\\n' "
-            '"$YORHA_TEST_OTHER_PID" "$YORHA_TEST_OTHER_START" '
-            '> "$YORHA_TEST_LOCK_PATH/owner"\n'
+            '/bin/rm -f "$YORHA_TEST_LOCK_PATH"\n'
+            '/bin/ln "$YORHA_TEST_FOREIGN_CANDIDATE" "$YORHA_TEST_LOCK_PATH"\n'
             "exit 9\n"
         )
         self.sketchybar.chmod(0o755)
         result = self.run_apply("dark", extra_env={
-            "YORHA_TEST_OTHER_PID": str(other_pid),
-            "YORHA_TEST_OTHER_START": other_start,
             "YORHA_TEST_LOCK_PATH": str(self.lock),
+            "YORHA_TEST_FOREIGN_CANDIDATE": str(foreign_candidate),
         })
         self.assertEqual(result.returncode, 9)
-        self.assertTrue(self.lock.is_dir())
-        self.assertIn("token\tforeign-owner", (self.lock / "owner").read_text())
+        self.assertTrue(self.lock.is_file())
+        self.assertTrue(os.path.samefile(self.lock, foreign_candidate))
+        self.assertIn("token\tforeign-owner", self.lock.read_text())
+        self.assert_no_internal_lock_residue()
 
-    def write_signaling_mkdir(self, exit_code):
-        fake_bin = Path(self.tempdir.name) / f"fake-mkdir-{exit_code}"
+    def test_delayed_publisher_never_writes_or_removes_new_owner_lock(self):
+        publication_ready = Path(self.tempdir.name) / "publication-ready"
+        publication_release = Path(self.tempdir.name) / "publication-release"
+        light_started = Path(self.tempdir.name) / "light-started"
+        release_light = Path(self.tempdir.name) / "release-light"
+        holding_env = self.write_holding_sketchybar(light_started, release_light)
+        delayed_env = holding_env | self.write_pausing_publication_tools(
+            publication_ready, publication_release
+        )
+        delayed = self.start_apply("dark", delayed_env)
+        holder = None
+        try:
+            self.wait_for_path(publication_ready, delayed)
+            if self.lock.exists():
+                os.utime(self.lock, (1, 1))
+            holder = self.start_apply("light", holding_env)
+            self.wait_for_path(light_started, holder)
+            holder_lock = self.lock_snapshot()
+
+            publication_release.touch()
+            delayed_stdout, delayed_stderr = delayed.communicate(timeout=10)
+
+            self.assertEqual(delayed.returncode, 75, (
+                delayed_stdout, delayed_stderr
+            ))
+            self.assertEqual(self.lock_snapshot(), holder_lock)
+            self.assertEqual(self.call_argvs(), [self.expected_argv("light")])
+            self.assertIsNone(holder.poll())
+        finally:
+            publication_release.touch()
+            release_light.touch()
+            for process in (delayed, holder):
+                if process is not None and process.poll() is None:
+                    try:
+                        process.communicate(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.communicate(timeout=3)
+        self.assert_no_internal_lock_residue()
+
+    def test_active_published_owner_survives_beyond_stale_grace(self):
+        light_started = Path(self.tempdir.name) / "light-started"
+        release_light = Path(self.tempdir.name) / "release-light"
+        holding_env = self.write_holding_sketchybar(light_started, release_light)
+        holder = self.start_apply("light", holding_env)
+        try:
+            self.wait_for_path(light_started, holder)
+            os.utime(self.lock, (1, 1))
+            holder_lock = self.lock_snapshot()
+
+            contender = self.run_apply("dark", extra_env=self.fast_sleep_env())
+
+            self.assertEqual(contender.returncode, 75, contender.stderr)
+            self.assertEqual(self.lock_snapshot(), holder_lock)
+            self.assertEqual(self.call_argvs(), [self.expected_argv("light")])
+            self.assertIsNone(holder.poll())
+        finally:
+            release_light.touch()
+            if holder.poll() is None:
+                try:
+                    holder.communicate(timeout=3)
+                except subprocess.TimeoutExpired:
+                    holder.kill()
+                    holder.communicate(timeout=3)
+        self.assertEqual(holder.returncode, 0)
+        self.assertFalse(self.lock.exists())
+        self.assert_no_internal_lock_residue()
+
+    def write_signaling_publish(self, exit_code):
+        fake_bin = Path(self.tempdir.name) / f"fake-ln-{exit_code}"
         fake_bin.mkdir()
-        mkdir_body = "\n".join(
+        publish_command = (
+            '  /bin/ln "$@" 2>/dev/null || true'
+            if exit_code == 0
+            else '  printf \'foreign lock\\n\' > "$YORHA_TEST_LOCK_PATH"'
+        )
+        ln_body = "\n".join(
             [
                 "#!/usr/bin/env bash",
-                'if [ "$1" = "$YORHA_TEST_LOCK_PATH" ]; then',
-                '  /bin/mkdir "$1" 2>/dev/null || true',
+                'destination="${!#}"',
+                'if [ "$destination" = "$YORHA_TEST_LOCK_PATH" ]; then',
+                publish_command,
                 '  kill -INT "$PPID"',
                 f"  exit {exit_code}",
                 "fi",
-                'exec /bin/mkdir "$@"',
+                'exec /bin/ln "$@"',
                 "",
             ]
         )
-        (fake_bin / "mkdir").write_text(mkdir_body)
-        (fake_bin / "mkdir").chmod(0o755)
+        (fake_bin / "ln").write_text(ln_body)
+        (fake_bin / "ln").chmod(0o755)
         return {
             "PATH": f"{fake_bin}:{os.environ['PATH']}",
             "YORHA_TEST_LOCK_PATH": str(self.lock),
         }
 
-    def write_ordered_signaling_mkdir(self, exit_code, signals):
-        bash_env = Path(self.tempdir.name) / f"signal-mkdir-{exit_code}.bash"
+    def write_ordered_signaling_publish(self, exit_code, signals):
+        fake_bin = Path(self.tempdir.name) / f"signal-ln-{exit_code}"
+        fake_bin.mkdir()
+        first_signal, second_signal = signals
         signal_commands = "\n".join(
-            f'  builtin kill -{signal_name} "$$"' for signal_name in signals
+            (
+                '  target_pid="$PPID"',
+                f'  kill -{first_signal} "$target_pid"',
+                "  ( /bin/sleep 0.05; "
+                f'kill -{second_signal} "$target_pid" 2>/dev/null || true ) &',
+            )
         )
-        bash_env.write_text(
-            "mkdir() {\n"
-            '  /bin/mkdir "$@" 2>/dev/null || true\n'
+        publish_command = (
+            '  /bin/ln "$@" 2>/dev/null || true'
+            if exit_code == 0
+            else '  printf \'foreign lock\\n\' > "$YORHA_TEST_LOCK_PATH"'
+        )
+        (fake_bin / "ln").write_text(
+            "#!/usr/bin/env bash\n"
+            'destination="${!#}"\n'
+            'if [ "$destination" = "$YORHA_TEST_LOCK_PATH" ]; then\n'
+            f"{publish_command}\n"
             f"{signal_commands}\n"
-            f"  return {exit_code}\n"
-            "}\n"
+            f"  exit {exit_code}\n"
+            "fi\n"
+            'exec /bin/ln "$@"\n'
         )
-        return {"BASH_ENV": str(bash_env)}
+        (fake_bin / "ln").chmod(0o755)
+        return {
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "YORHA_TEST_LOCK_PATH": str(self.lock),
+        }
 
-    def test_signal_after_successful_mkdir_before_ownership_cleans_our_lock(self):
-        result = self.run_apply("dark", extra_env=self.write_signaling_mkdir(exit_code=0))
+    def test_signal_after_successful_publication_cleans_our_lock(self):
+        result = self.run_apply(
+            "dark", extra_env=self.write_signaling_publish(exit_code=0)
+        )
         self.assertEqual(result.returncode, 130)
         self.assertFalse(self.lock.exists())
         self.assertFalse(self.state.exists())
         self.assertEqual(self.call_argvs(), [])
+        self.assert_no_internal_lock_residue()
 
-    def test_signal_after_failed_mkdir_preserves_foreign_lock(self):
-        self.lock.mkdir()
-        result = self.run_apply("dark", extra_env=self.write_signaling_mkdir(exit_code=1))
+    def test_signal_after_failed_publication_preserves_foreign_lock(self):
+        result = self.run_apply(
+            "dark", extra_env=self.write_signaling_publish(exit_code=1)
+        )
         self.assertEqual(result.returncode, 130)
-        self.assertTrue(self.lock.is_dir())
+        self.assertEqual(self.lock.read_text(), "foreign lock\n")
         self.assertFalse(self.state.exists())
         self.assertEqual(self.call_argvs(), [])
+        self.assert_no_internal_lock_residue()
 
-    def test_first_signal_wins_during_successful_mkdir_boundary(self):
+    def test_first_signal_wins_during_successful_publication_boundary(self):
         result = self.run_apply(
             "dark",
-            extra_env=self.write_ordered_signaling_mkdir(
+            extra_env=self.write_ordered_signaling_publish(
                 exit_code=0, signals=("INT", "TERM")
             ),
         )
@@ -308,19 +508,20 @@ class ApplyAppearanceTests(unittest.TestCase):
         self.assertFalse(self.lock.exists())
         self.assertFalse(self.state.exists())
         self.assertEqual(self.call_argvs(), [])
+        self.assert_no_internal_lock_residue()
 
-    def test_first_signal_wins_during_failed_mkdir_boundary(self):
-        self.lock.mkdir()
+    def test_first_signal_wins_during_failed_publication_boundary(self):
         result = self.run_apply(
             "dark",
-            extra_env=self.write_ordered_signaling_mkdir(
+            extra_env=self.write_ordered_signaling_publish(
                 exit_code=1, signals=("TERM", "INT")
             ),
         )
         self.assertEqual(result.returncode, 143)
-        self.assertTrue(self.lock.is_dir())
+        self.assertEqual(self.lock.read_text(), "foreign lock\n")
         self.assertFalse(self.state.exists())
         self.assertEqual(self.call_argvs(), [])
+        self.assert_no_internal_lock_residue()
 
     def test_printf_failure_removes_temporary_marker_and_preserves_prior_mode(self):
         self.assertEqual(self.run_apply("light").returncode, 0)
@@ -373,6 +574,7 @@ class ApplyAppearanceTests(unittest.TestCase):
             self.assertFalse(self.lock.exists())
             self.assertFalse(self.state.exists())
             self.assertEqual(list(self.appearance_root.glob(".last-successful-mode.*")), [])
+            self.assert_no_internal_lock_residue()
             child_pid = int(child_pid_file.read_text().strip())
             child_deadline = time.monotonic() + 1
             while time.monotonic() < child_deadline:
