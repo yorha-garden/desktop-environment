@@ -8,7 +8,7 @@ export const render = () => <style>{`
   }
   @media (prefers-color-scheme: dark) { :root {
     --yorha-field:#16161A; --yorha-text:#D8D4C4; --yorha-value:#EFEBDB;
-    --yorha-panel:rgba(58,58,64,.72); /* #3A3A40 */ --yorha-ornament:#6E7B8B;
+    --yorha-panel:rgba(58,58,64,.72); --yorha-ornament:#6E7B8B;
     --yorha-track:rgba(216,212,196,.18); --yorha-accent:#BC9A5A; --yorha-alert:#BB3B36;
   }}
 `}</style>;

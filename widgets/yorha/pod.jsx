@@ -91,19 +91,24 @@ export const render = ({ output }) => {
   return (
     <div className="pod pod-enter">
       <style>{`
-        .pod { width: 300px; border: 1px solid var(--yorha-ornament, #4A4741);
+        .pod { --yorha-pod-border:rgba(74,71,65,.45); --yorha-pod-rule:rgba(74,71,65,.3);
+               width: 300px; border: 1px solid var(--yorha-pod-border);
                background: var(--yorha-panel, rgba(214,210,193,.5)); padding: 13px 15px; position: relative;
-               transition: background 200ms ease, border 200ms ease; }
+               transition: background 200ms ease, border-color 200ms ease; }
         .pod::before, .pod::after { content: ''; position: absolute; width: 8px; height: 8px;
                border: 1px solid var(--yorha-ornament, #4A4741); transition: border 200ms ease; }
         .pod::before { top: -1px; left: -1px; border-right: 0; border-bottom: 0; }
         .pod::after  { bottom: -1px; right: -1px; border-left: 0; border-top: 0; }
         .pod-hd { font-size: 8px; letter-spacing: .3em; text-transform: uppercase;
                   opacity: .6; padding-bottom: 7px; margin-bottom: 8px;
-                  border-bottom: 1px solid var(--yorha-ornament, #4A4741);
-                  display: flex; justify-content: space-between; align-items: baseline; }
+                  border-bottom: 1px solid var(--yorha-pod-rule);
+                  display: flex; justify-content: space-between; align-items: baseline;
+                  transition: border-color 200ms ease; }
         .pod-src { font-size: 7px; letter-spacing: .18em; opacity: .55; }
         .pod-src.live { color: var(--yorha-accent, #BC9A5A); opacity: .9; transition: color 200ms ease; }
+        @media (prefers-color-scheme: dark) {
+          .pod { --yorha-pod-border:rgba(110,123,139,.45); --yorha-pod-rule:rgba(110,123,139,.3); }
+        }
         /* wrapper clips; base state is fully revealed so a typewriter that never
            starts cannot leave the message invisible (that bug shipped once) */
         .pod-msg { font-size: 11px; line-height: 1.7; letter-spacing: .03em;
