@@ -559,3 +559,128 @@ printf 'after-block\n' >> "$YORHA_TRAP_LOG"
         self.assertEqual(returncode, -signal.SIGTERM)
         self.assertEqual(lines, ["prior-term:143:outer-handler"])
         self.assertEqual(self.pending_temps(), [])
+
+
+class RestoreContractTests(unittest.TestCase):
+    def write_double(self, directory, name, body):
+        path = directory / name
+        path.write_text("#!/bin/sh\n" + body)
+        path.chmod(0o755)
+        return path
+
+    def test_generated_restore_cleans_appearance_runtime_in_sandbox(self):
+        with tempfile.TemporaryDirectory() as raw:
+            sandbox = Path(raw)
+            home = sandbox / "home"
+            fakebin = sandbox / "bin"
+            home.mkdir(); fakebin.mkdir()
+            (home / ".zshrc").write_text("baseline\n")
+
+            yorha = home / ".config/yorha"
+            yorha.mkdir(parents=True)
+            (yorha / "keep.txt").write_text("pre-existing\n")
+            agents = home / "Library/LaunchAgents"
+            agents.mkdir(parents=True)
+            plist = agents / "com.yorha.appearance-watcher.plist"
+            original_plist = b"pre-existing plist bytes\n"
+            plist.write_bytes(original_plist)
+
+            # The snapshot sees an already-loaded pre-existing job. The fake
+            # launchctl mutates this file for bootout/bootstrap state changes.
+            job_state = sandbox / "appearance-job-loaded"
+            job_state.write_text("loaded\n")
+            recorded_wallpaper = sandbox / "recorded.heic"
+            recorded_wallpaper.write_bytes(b"baseline wallpaper")
+            wallpaper_state = sandbox / "wallpaper-state"
+            launchctl_log = sandbox / "launchctl-log"
+            env = os.environ.copy()
+            env.update({
+                "HOME": str(home),
+                "PATH": f"{fakebin}:/usr/bin:/bin",
+                "YORHA_TEST_RECORDED_WALLPAPER": str(recorded_wallpaper),
+                "YORHA_TEST_WALLPAPER_STATE": str(wallpaper_state),
+                "YORHA_TEST_LAUNCHCTL_LOG": str(launchctl_log),
+                "YORHA_TEST_JOB_STATE": str(job_state),
+            })
+
+            self.write_double(fakebin, "osascript", r'''
+if [ "$1" = "-e" ]; then
+  case "$2" in
+    *"get picture of current desktop"*)
+      printf '%s\n' "$YORHA_TEST_RECORDED_WALLPAPER" ;;
+  esac
+elif [ "$1" = "-" ]; then
+  printf '%s\n' "$2" > "$YORHA_TEST_WALLPAPER_STATE"
+fi
+exit 0
+''')
+            self.write_double(fakebin, "launchctl", r'''
+printf '%s\n' "$*" >> "$YORHA_TEST_LAUNCHCTL_LOG"
+case "$1:$2" in
+  print:*com.yorha.appearance-watcher)
+    [ -f "$YORHA_TEST_JOB_STATE" ] ;;
+  bootout:*com.yorha.appearance-watcher)
+    rm -f "$YORHA_TEST_JOB_STATE" ;;
+  bootstrap:*)
+    case "$3" in
+      *com.yorha.appearance-watcher.plist)
+        : > "$YORHA_TEST_JOB_STATE" ;;
+    esac ;;
+esac
+exit 0
+''')
+            self.write_double(fakebin, "brew", "exit 0\n")
+            self.write_double(fakebin, "pkill", "exit 0\n")
+            self.write_double(fakebin, "sw_vers", "printf '26.0\\n'\n")
+            self.write_double(fakebin, "csrutil", "printf 'System Integrity Protection status: enabled.\\n'\n")
+
+            generated = subprocess.run(
+                [str(ROOT / "bin/yorha-backup.sh")], env=env,
+                text=True, capture_output=True, check=True)
+            snapshot = Path(generated.stdout.strip().splitlines()[-1])
+            restore = snapshot / "restore.sh"
+            self.assertTrue(restore.is_file())
+
+            # Simulate deployment replacing the original plist while its new
+            # job is loaded, then populate every appearance runtime target.
+            plist.write_text("deployed YoRHa plist\n")
+            job_state.write_text("deployed job loaded\n")
+            self.assertNotEqual(plist.read_bytes(), original_plist)
+            self.assertTrue(job_state.is_file())
+            appearance = yorha / "appearance"
+            runtime_paths = [
+                appearance / "yorha-system.heic",
+                appearance / "yorha-icon-light.png",
+                appearance / "yorha-icon-dark.png",
+                appearance / "last-successful-mode",
+                yorha / "bin/yorha-appearance-watcher",
+                yorha / "bin/apply-appearance.sh",
+                yorha / "logs/appearance.log",
+            ]
+            for path in runtime_paths:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("installed\n")
+            (appearance / "apply.lock").mkdir()
+
+            subprocess.run([str(restore)], env=env, check=True,
+                           text=True, capture_output=True)
+
+            for path in runtime_paths:
+                self.assertFalse(path.exists(), path)
+            self.assertFalse((appearance / "apply.lock").exists())
+            self.assertTrue((yorha / "keep.txt").is_file())
+            self.assertEqual(plist.read_bytes(), original_plist)
+            self.assertTrue(job_state.is_file())
+            calls = launchctl_log.read_text().splitlines()
+            label = "com.yorha.appearance-watcher"
+            self.assertTrue(any("bootout" in call and label in call for call in calls))
+            self.assertTrue(any("bootstrap" in call and str(plist) in call for call in calls))
+            self.assertEqual(wallpaper_state.read_text().strip(), str(recorded_wallpaper))
+
+    def test_docs_state_boundary(self):
+        readme = (ROOT / "README.md").read_text().lower()
+        decisions = (ROOT / "docs/DECISIONS.md").read_text().lower()
+        self.assertIn("automatic appearance", readme)
+        self.assertIn("ghostty remains permanently dark", readme)
+        self.assertIn("appearance-watcher", decisions)
+        self.assertIn("prefers-color-scheme", decisions)

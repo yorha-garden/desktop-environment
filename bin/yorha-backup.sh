@@ -54,6 +54,16 @@ osascript -e 'tell application "System Events" to get picture of current desktop
 # --- 6. services and login agents ------------------------------------------
 { brew services list 2>/dev/null || true; } > "$DEST/services.txt"
 { ls -1 "$HOME/Library/LaunchAgents" 2>/dev/null || true; } > "$DEST/launchagents.txt"
+APPEARANCE_LABEL=com.yorha.appearance-watcher
+APPEARANCE_PLIST="$HOME/Library/LaunchAgents/$APPEARANCE_LABEL.plist"
+if [ -f "$APPEARANCE_PLIST" ]; then
+  cp "$APPEARANCE_PLIST" "$DEST/appearance-watcher.plist.original"
+fi
+if launchctl print "gui/$(id -u)/$APPEARANCE_LABEL" >/dev/null 2>&1; then
+  printf 'loaded\n' > "$DEST/appearance-watcher.loaded-state"
+else
+  printf 'unloaded\n' > "$DEST/appearance-watcher.loaded-state"
+fi
 # Login items, one per line. Restore removes only the ones absent at snapshot time.
 { osascript -e 'tell application "System Events" to get name of every login item' 2>/dev/null \
     | tr ',' '\n' | sed 's/^ *//;s/ *$//' || true; } > "$DEST/loginitems.txt"
@@ -112,6 +122,27 @@ elif [ -f "$HERE/ghostty-appsupport-config" ]; then
   cp "$HERE/ghostty-appsupport-config" "$APPSUP"
 else
   rm -f "$APPSUP"
+fi
+
+echo "==> restoring appearance watcher"
+LABEL=com.yorha.appearance-watcher
+PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+launchctl bootout "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || true
+rm -f "$HOME/.config/yorha/bin/yorha-appearance-watcher"
+rm -f "$HOME/.config/yorha/bin/apply-appearance.sh"
+rm -f "$HOME/.config/yorha/logs/appearance.log"
+rm -rf "$HOME/.config/yorha/appearance"
+
+if [ -f "$HERE/appearance-watcher.plist.original" ]; then
+  PLIST_TMP="$PLIST.restore.$$"
+  cp "$HERE/appearance-watcher.plist.original" "$PLIST_TMP"
+  mv "$PLIST_TMP" "$PLIST"
+  if grep -qxF loaded "$HERE/appearance-watcher.loaded-state" 2>/dev/null; then
+    launchctl bootstrap "gui/$(id -u)" "$PLIST" \
+      || echo "warning: could not restore pre-existing $LABEL job" >&2
+  fi
+else
+  rm -f "$PLIST"
 fi
 
 echo "==> reverting paths, per what actually existed at snapshot time"

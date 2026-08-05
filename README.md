@@ -1,7 +1,8 @@
 # YoRHa Desktop Environment
 
-A NieR-inspired desktop for macOS: dark hacking-mode terminal, light parchment
-palette everywhere else, and a Pod 042 support unit that talks to Gemini.
+A NieR-inspired desktop for macOS: automatic appearance switching for the wallpaper,
+desktop widgets, and menu bar, plus a Pod 042 support unit that talks to Gemini.
+Ghostty remains permanently dark; the appearance system never edits or reloads it.
 
 **Host it was built on:** macOS 26.5.2, Apple Silicon, SIP enabled and staying that way.
 
@@ -14,7 +15,7 @@ places macOS reads from (`~/.config/…`, `~/Library/Application Support/…`); 
 repo holds the authoritative copies plus the Gemini integration and the docs.
 
 ```
-bin/deploy.sh    repo  ->  live locations   (also loads the oracle timer)
+bin/deploy.sh    repo  ->  live locations   (also loads four user LaunchAgents)
 bin/capture.sh   live  ->  repo             (run after editing something in place)
 ```
 
@@ -29,19 +30,76 @@ to see exactly what changed on the machine.
 |---|---|
 | `bin/pod-oracle.py` | Generates Pod messages via Gemini. Runs on a timer, never from the widget. |
 | `bin/deploy.sh` / `capture.sh` | Sync in each direction. |
-| `bin/yorha-backup.sh` | Snapshots every path the install touches and emits a tested `restore.sh`. |
+| `bin/yorha-backup.sh` | Snapshots every path the install touches and emits a tested `restore.sh`, including the prior appearance-watcher plist bytes and loaded state. |
 | `bin/ubersicht-watchdog.sh` | Health-checks Übersicht every 60s and restarts it after 2 consecutive failures. Also starts it at login. |
-| `bin/make-wallpaper.sh` | Rasterizes `assets/wallpaper.svg` → `.png` and sets it as the desktop. Verifies the output dimensions; Chrome silently clamps oversized headless viewports. |
+| `bin/apply-appearance.sh` | Idempotent SketchyBar coordinator: applies one validated palette/crest and records only successful modes. |
+| `bin/appearance-watcher.swift` | Native macOS appearance and wake observer, compiled by deployment into the runtime tree. |
+| `bin/make-wallpaper.sh` | Verifies or assigns the committed dynamic HEIC; it never regenerates assets. |
+| `bin/yorha-system-wallpaper.swift` | Builds, inspects, and extracts the exact two-frame dynamic-HEIC contract. |
+| `bin/regenerate-system-wallpaper.sh` | Developer-only SVG rasterization and HEIC regeneration entry point. |
 | `widgets/yorha/*.jsx` | Übersicht desktop layer: HUD, Pod, scan beam, corner ornaments (arcs + line trio, ported from the portfolio). |
+| `widgets/yorha/theme.jsx` | Render-only CSS variable provider with a native `prefers-color-scheme` dark override. |
 | `config/ghostty/` | Terminal config + the CRT shader. **Two** config files — see below. |
 | `config/sketchybar/` | Menu bar. Transparent — no fill, no border; items float on the wallpaper. |
 | `config/aerospace/` | Tiling config. Installed, `start-at-login = false`, currently not running by choice. |
 | `config/shell/` | Palette, zsh layer, Starship prompt, fastfetch, boot logo. |
 | `config/editor/` | VS Code–format colour theme. Install it yourself; nothing deploys into an editor. |
-| `assets/wallpaper.svg` | Wallpaper source. The PNG is generated and gitignored — regenerate with `bin/make-wallpaper.sh`. |
-| `assets/yorha-icon.svg` / `.png` | The YoRHa crest. The PNG is the ink-tinted 31×36 raster the bar uses; `deploy.sh` copies it to `~/.config/sketchybar/` because launchd services cannot read TCC-protected `~/Documents`. |
+| `assets/wallpaper.svg` / `wallpaper-dark.svg` | Developer SVG sources for the matching light and dark wallpaper frames. |
+| `assets/yorha-system.heic` | Committed two-frame 5120×2880 dynamic wallpaper; deployment copies and assigns it once, then macOS owns frame selection. |
+| `assets/yorha-icon-light.png` / `yorha-icon-dark.png` | Fixed-name SketchyBar crests copied into the appearance runtime tree. |
 | `launchd/` | Two agents: the oracle's 5-minute timer and the Übersicht watchdog. |
 | `docs/` | Architecture, palette, and the decision log. |
+
+---
+
+## Automatic appearance
+
+The macOS effective appearance owns the change. Deployment assigns one stable
+`yorha-system.heic` path to every desktop; its native appearance metadata lets
+macOS choose the light or dark frame without a wallpaper script, process restart,
+or per-transition assignment. Übersicht follows the same system state through
+`@media (prefers-color-scheme: dark)`, so widgets keep their state and animations
+instead of reloading.
+
+```text
+macOS effective appearance
+   ├─ native wallpaper engine -> selects the HEIC frame
+   ├─ Übersicht WebKit        -> resolves CSS custom properties
+   └─ appearance-watcher      -> apply-appearance.sh -> live SketchyBar fields
+```
+
+The dedicated `com.yorha.appearance-watcher` LaunchAgent observes appearance
+notifications, login, and wake, and launchd restarts it after a crash. The
+coordinator updates only SketchyBar text colors, wordmark color, and crest. A
+same-mode run is a no-op unless passed `--force`; failures do not advance the
+successful-mode marker, so startup, wake, or the next notification retries.
+
+Deployment manages four user LaunchAgents: the Pod oracle timer, Übersicht
+watchdog, SketchyBar minute-boundary event, and appearance watcher. Appearance
+runtime files are deliberately outside the TCC-protected repository:
+
+```text
+~/.config/yorha/bin/yorha-appearance-watcher
+~/.config/yorha/bin/apply-appearance.sh
+~/.config/yorha/appearance/yorha-system.heic
+~/.config/yorha/appearance/yorha-icon-{light,dark}.png
+~/.config/yorha/appearance/{apply.lock,last-successful-mode}
+~/.config/yorha/logs/appearance.log
+~/Library/LaunchAgents/com.yorha.appearance-watcher.plist
+```
+
+Ghostty remains permanently dark. Neither the watcher nor the coordinator reads,
+writes, reloads, or signals either Ghostty configuration or its running windows.
+
+The committed HEIC is the deployment source. Asset regeneration is an explicit
+developer operation and requires Chrome:
+
+```bash
+bin/regenerate-system-wallpaper.sh --with-chrome
+```
+
+Normal deployment only inspects the committed file; it never launches Chrome or
+regenerates wallpaper frames.
 
 ---
 
@@ -138,14 +196,18 @@ off-screen. Visibility must never depend on an animation firing — the rc now e
 with an unconditional `y_offset=0`, and the slide-in ceremony is scoped to first
 login via a `/tmp` sentinel.
 
-**macOS caches the desktop picture BY PATH.** Rewriting the same filename and
-re-setting the same path is a silent no-op — the window server keeps serving the
-cached rendition, with no error anywhere, so wallpaper edits appear not to apply
-while being perfectly correct on disk. `make-wallpaper.sh` therefore writes
-`wallpaper-<sha>.png`, a content-derived name, and prunes superseded rasters.
-Even then the AppleScript set is not enough: on macOS 26 the wallpaper belongs to
-`WallpaperAgent`, which kept reporting an already-deleted path until it was
-restarted. The script now ends with `killall WallpaperAgent`.
+**Assign the dynamic HEIC once and leave it to macOS.** Deployment copies the
+committed file to `~/.config/yorha/appearance/yorha-system.heic` and assigns that
+exact stable path to every desktop. macOS reads its `apple_desktop:apr` metadata
+and owns frame selection and transition timing. The appearance watcher and
+SketchyBar coordinator must never rewrite the HEIC, reassign it, select a frame,
+or restart `WallpaperAgent`.
+
+**launchd jobs cannot run from this repository.** `~/Documents` is TCC-protected,
+and a correctly loaded plist can still fail with `Operation not permitted` when
+its executable lives here. Deployment therefore installs the watcher and
+coordinator under `~/.config/yorha/bin`, wallpaper and crests under
+`~/.config/yorha/appearance`, and logs under `~/.config/yorha/logs`.
 
 **The browser preview of Übersicht (127.0.0.1:41416) is not ground truth.** A
 second browser client can mount every widget container and render nothing into
@@ -189,8 +251,10 @@ the marquee by 40px.
 bash "$(cat ~/.config/yorha/BACKUP_PATH)/restore.sh"
 ```
 
-Points at an immutable pre-install baseline. Stops services, removes LaunchAgents,
-restores both Ghostty configs and `~/.zshrc`, and derives its uninstall advice by
+Points at an immutable pre-install baseline. Stops services, restores the exact
+prior appearance-watcher plist and loaded/unloaded state, removes only the feature's
+appearance runtime, restores the recorded wallpaper with an argv-bound path,
+restores both Ghostty configs and `~/.zshrc`, and derives uninstall advice by
 diffing the captured package manifest. Verified by sandboxed dry run.
 
 ---

@@ -23,6 +23,90 @@ needs 16 slots, and that is a different concern from the UI palette.
 
 ---
 
+## Automatic appearance: native ownership, narrow coordination
+
+The wallpaper, Übersicht layer, and SketchyBar follow the effective macOS Light or
+Dark appearance. Ghostty remains permanently dark. Its files, shader, palette,
+process, and windows are intentionally outside the appearance system; matching
+some dark desktop colors to Ghostty is visual coordination, not runtime coupling.
+
+### Exact visual palettes
+
+Light preserves the original parchment design:
+
+| Role | Value | Consumers |
+|---|---|---|
+| Field | `#CAC5B0` | Wallpaper base |
+| Text and ornament | `#4A4741` | Widgets, light crest, SketchyBar text and wordmark |
+| Raised surface | `#D6D2C1` | Translucent Pod panel |
+| Live signal | `#BC9A5A` | Linked state |
+| Alert | `#BB3B36` | Memory and battery warnings |
+
+Dark uses the approved Terminal Native palette:
+
+| Role | Value | Consumers |
+|---|---|---|
+| Field | `#16161A` | Wallpaper base |
+| Text | `#D8D4C4` | Widgets and SketchyBar text |
+| Bright value | `#EFEBDB` | Primary telemetry values |
+| Raised surface | `#3A3A40` | Translucent Pod panel |
+| Ornament | `#6E7B8B` | Wallpaper lattice, arcs, and scan beam |
+| Live signal | `#BC9A5A` | Dark crest, YoRHa wordmark, and linked state |
+| Alert | `#BB3B36` | Memory and battery warnings |
+
+Only colors and the crest/wallpaper variant change. Geometry, typography, command
+cadence, and motion do not.
+
+### One assigned dynamic HEIC
+
+The wallpaper is a single committed `assets/yorha-system.heic`, rather than two
+runtime files selected by a script. The file contains exactly two 5120×2880
+frames: light at index 0 and dark at index 1. Frame 0 carries an
+`apple_desktop:apr` Image I/O metadata tag whose base64-encoded binary property
+list is exactly `{"l": 0, "d": 1}`. Deployment validates the contract, copies the
+HEIC to `~/.config/yorha/appearance/yorha-system.heic`, and assigns that path to
+every desktop once. macOS then owns frame choice and transition timing.
+
+This avoids wallpaper cache churn, stale repository paths, per-transition
+AppleScript, and `WallpaperAgent` restarts. The watcher and coordinator therefore
+contain no wallpaper behavior. The developer-only regeneration boundary is
+`bin/regenerate-system-wallpaper.sh --with-chrome`; deploy and runtime paths only
+inspect the committed asset and never start Chrome.
+
+### Dedicated watcher and coordinator
+
+`com.yorha.appearance-watcher` is a compiled Swift LaunchAgent with `RunAtLoad`
+and `KeepAlive`. A native observer is used because scheduled Auto transitions are
+system events, not polling intervals, and because wake needs an immediate repair
+opportunity. It observes `AppleInterfaceThemeChangedNotification`, coalesces a
+burst for 150 ms, handles wake and startup immediately, resolves the final
+effective mode, and invokes the installed coordinator with exactly `light` or
+`dark`. Keeping this responsibility out of SketchyBar and Übersicht gives one
+small, crash-recovered owner and avoids reloading either UI.
+
+The executables live under `~/.config/yorha/bin` and output is directed to
+`~/.config/yorha/logs/appearance.log`. They cannot reliably run from this
+TCC-protected repository under `~/Documents`, even when launchd successfully loads
+the plist.
+
+`apply-appearance.sh` owns only live SketchyBar fields: clock/date text, YoRHa
+wordmark, and crest path. It serializes calls with `appearance/apply.lock` and
+writes `appearance/last-successful-mode` atomically only after SketchyBar succeeds.
+Repeating that mode is a no-op unless `--force` is supplied. A failed update leaves
+the prior marker untouched, so startup, wake, a manual reload, or the next system
+notification retries instead of falsely considering the mode applied.
+
+### CSS media query, no widget reload
+
+Übersicht receives its palette through the render-only `theme.jsx` provider. Light
+tokens are declared on `:root`; `@media (prefers-color-scheme: dark)` overrides
+them with the dark palette. WebKit updates the variables in place, so module state,
+telemetry cadence, and animation progress survive an appearance transition. A
+reload would replay entrance effects and discard widget state, so neither the
+watcher nor the coordinator signals Übersicht.
+
+---
+
 ## Terminal: Ghostty
 
 Chosen over kitty, WezTerm and iTerm2 because it is the only one of the four that
