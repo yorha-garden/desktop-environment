@@ -16,9 +16,10 @@ Ghostty is explicitly excluded. Its window theme, terminal palette, shader, conf
 - Use the approved **Terminal Native** palette for Dark appearance.
 - Preserve widget geometry, typography, telemetry cadence, and motion in both appearances.
 - Use CSS media queries for Übersicht so a switch does not reload widgets or replay their entrance animations.
-- Pre-render and deploy both wallpaper variants and both crest variants. Runtime switching must not invoke Chrome or regenerate assets.
+- Commit one dynamic `assets/yorha-system.heic` containing the light and dark wallpaper frames, and commit both crest variants. Deployment assigns the HEIC once; macOS selects its frame natively thereafter.
+- Keep Chrome in the explicit developer-only `bin/regenerate-system-wallpaper.sh --with-chrome` workflow. Deployment and appearance runtime never invoke Chrome or regenerate assets.
 - Install every executable and runtime asset outside the TCC-protected repository under `~/.config/yorha/`.
-- Keep the coordinator idempotent and allow one failed surface to be retried without blocking the others.
+- Keep the SketchyBar coordinator idempotent and retain a successful-mode marker so failed bar updates are retried.
 
 ## Visual contract
 
@@ -57,16 +58,17 @@ macOS effective appearance
         │
         │ AppleInterfaceThemeChangedNotification / wake / process launch
         ▼
-compiled YoRHa Swift watcher (LaunchAgent, RunAtLoad + KeepAlive)
-        │
-        │ invokes coordinator with exactly "light" or "dark"
-        ▼
-idempotent appearance coordinator
-        ├── select and apply pre-rendered wallpaper to every desktop
-        └── update live SketchyBar colors and crest image
+        ├── macOS wallpaper engine selects frame 0/1 from the assigned dynamic HEIC
+        ├── Übersicht WebKit resolves prefers-color-scheme CSS variables
+        └── compiled YoRHa Swift watcher (LaunchAgent, RunAtLoad + KeepAlive)
+                    │
+                    │ invokes coordinator with exactly "light" or "dark"
+                    ▼
+            idempotent appearance coordinator
+                    └── update live SketchyBar colors and crest image
 
-Übersicht's WebKit document follows the same effective appearance independently
-through prefers-color-scheme CSS variables; it is not reloaded.
+The dynamic HEIC is assigned once during deployment. Neither the watcher nor the
+coordinator participates in wallpaper selection, and Übersicht is not reloaded.
 
 Ghostty is outside this graph.
 ```
@@ -92,25 +94,23 @@ Add `launchd/com.yorha.appearance-watcher.plist`. Deployment substitutes runtime
 
 The job uses `RunAtLoad` and `KeepAlive`. It points only to files under `~/.config/yorha/`, because launchd jobs cannot reliably execute or read this repository under `~/Documents`. Standard output and error use a dedicated log under `~/.config/yorha/logs/`.
 
-Repeated deployment first boots out the existing job, replaces the binary, coordinator, assets, and plist, then bootstraps the new job. A watcher crash is recovered by launchd; a coordinator failure does not terminate the watcher.
+Repeated deployment first boots out the existing job, replaces the binary, coordinator, crests, dynamic HEIC, and plist, then bootstraps the new job. A watcher crash is recovered by launchd; a coordinator failure does not terminate the watcher.
 
 ### Appearance coordinator
 
 Add `bin/apply-appearance.sh`. Deployment copies it to `~/.config/yorha/bin/apply-appearance.sh`. Its accepted forms are `apply-appearance.sh light`, `apply-appearance.sh dark`, and either form followed by `--force` for deployment and tests.
 
-The coordinator serializes concurrent runs with `~/.config/yorha/appearance/apply.lock`. It reads `~/.config/yorha/appearance/assets.env`, validates all required files before changing state, and records the last fully successful mode in `~/.config/yorha/appearance/last-successful-mode`. A repeated successful mode is a no-op unless forced. If any surface fails, the successful-state marker is not advanced, allowing the next notification or wake event to retry.
+The coordinator serializes concurrent runs with `~/.config/yorha/appearance/apply.lock`. It resolves the two committed crest variants at fixed runtime paths, validates the selected crest before changing SketchyBar, and records the last fully successful mode in `~/.config/yorha/appearance/last-successful-mode`. A repeated successful mode is a no-op unless forced. If SketchyBar is unavailable or its update fails, the successful-state marker is not advanced, allowing the next notification, wake event, or bar reload to retry.
 
-Wallpaper and SketchyBar are applied as independent steps. Failure in one step is logged and does not prevent the other step from running. The coordinator exits nonzero if either step failed.
+The coordinator owns only live SketchyBar colors and crest selection. It contains no wallpaper assignment, `WallpaperAgent` restart, raster-path selection, asset manifest, or Übersicht refresh behavior.
 
 ### Wallpaper assets and switching
 
-Retain `assets/wallpaper.svg` as the light source and add `assets/wallpaper-dark.svg`. Both are 5120×2880 and use identical geometry, lattice, grain, and vignette structure. Dark mode substitutes the Terminal Native field and ornament colors and uses a deeper vignette suitable for `#16161A`.
+Retain `assets/wallpaper.svg` and `assets/wallpaper-dark.svg` as 5120×2880 developer sources with identical geometry, lattice, grain, and vignette structure. The committed runtime artifact is `assets/yorha-system.heic`, containing exactly two 5120×2880 frames: light at index 0 and dark at index 1. Its `apple_desktop:apr` Image I/O metadata maps `l` to `0` and `d` to `1`.
 
-Extend `bin/make-wallpaper.sh` so it renders both sources to content-hashed PNGs and verifies their dimensions. The render step runs during deployment, not during an appearance change. Deployment copies the two current hashed rasters to `~/.config/yorha/appearance/wallpapers/` and writes their exact paths to `assets.env`. Superseded runtime rasters are pruned only after the new pair has been copied successfully.
+`bin/yorha-system-wallpaper.swift` builds, inspects, and extracts this HEIC. `bin/regenerate-system-wallpaper.sh --with-chrome` is the sole wallpaper-generation entry point and is developer-only: it rasterizes both SVG sources in a temporary directory, rebuilds the committed HEIC, and prints the inspected contract. `bin/make-wallpaper.sh` only verifies or applies the committed HEIC; it contains no Chrome or regeneration invocation.
 
-On a switch, the coordinator assigns the selected raster to every desktop with AppleScript, then performs the existing best-effort WallpaperAgent restart so macOS 26 re-reads the assigned path. The different content-hashed paths prevent macOS's path cache from reusing the opposite or an obsolete rendition.
-
-The switch uses macOS's wallpaper transition. No custom overlay, fade window, or animation is added.
+Deployment verifies the committed asset, copies it to `~/.config/yorha/appearance/yorha-system.heic`, and assigns that stable runtime path to every desktop once. No deploy-time rendering occurs. After assignment, macOS owns Light/Dark frame selection and its native transition. Appearance notifications, wake events, and forced coordinator calls never reassign the wallpaper, select a frame, restart a wallpaper process, or maintain wallpaper state.
 
 ### Übersicht widgets
 
@@ -134,7 +134,7 @@ At the end of a normal SketchyBar configuration load, the installed coordinator 
 
 ## Palette ownership
 
-`config/shell/palette.sh` remains the named palette source and gains names for the bright and steel tokens already present in Ghostty's palette. The widget theme provider, wallpaper sources, SketchyBar mapping, and tests use the same approved values. A validation test checks those consumers against the canonical token values so duplicated CSS/SVG representations cannot silently drift.
+`config/shell/palette.sh` remains the named palette source and gains names for the bright and steel tokens already present in Ghostty's palette. The widget theme provider, wallpaper SVG sources and committed HEIC frames, SketchyBar mapping, and tests use the same approved values. A validation test checks those consumers against the canonical token values so duplicated CSS/SVG representations cannot silently drift.
 
 ## Ghostty isolation invariant
 
@@ -147,11 +147,10 @@ Verification records checksums for both tracked Ghostty configuration files and 
 ## Failure behavior
 
 - Invalid mode: reject without changing any surface.
-- Missing or malformed asset manifest: log the error and change nothing.
-- Missing one mode's raster or crest: reject that mode before changing any surface.
+- Missing or invalid committed HEIC during deployment: abort before wallpaper assignment.
+- Missing selected crest at runtime: reject that mode before changing SketchyBar.
 - Concurrent notifications: serialize coordinator runs and coalesce watcher callbacks.
-- Wallpaper assignment failure: continue to SketchyBar, report nonzero, and retry on the next event.
-- SketchyBar absent: keep the wallpaper result, report the unavailable bar, and retry after wake or the next event. A later SketchyBar reload applies the current mode itself.
+- SketchyBar absent or update failure: report nonzero without advancing the successful-mode marker, then retry after wake or the next event. A later SketchyBar reload applies the current mode itself.
 - Übersicht absent: no action is required; its CSS resolves the effective appearance when Übersicht next launches.
 - Watcher crash: launchd restarts it and startup application repairs the current appearance.
 - Machine wake: force re-evaluation even if the effective mode did not change.
@@ -163,15 +162,15 @@ No failure path falls back to changing Ghostty.
 `bin/deploy.sh` will:
 
 1. Validate `swiftc` availability and compile the watcher.
-2. Render and validate both wallpaper rasters and both crest variants.
-3. Copy runtime executables, palettes, manifest, and assets beneath `~/.config/yorha/`.
+2. Inspect the committed two-frame HEIC contract; do not render or regenerate it.
+3. Copy the dynamic HEIC, both crest variants, coordinator, and watcher beneath `~/.config/yorha/`.
 4. Deploy the updated widgets and SketchyBar configuration.
 5. Install and bootstrap the appearance LaunchAgent.
-6. Force one application of the effective current mode.
+6. Assign the copied dynamic HEIC to every desktop once, then force one SketchyBar application of the effective current mode.
 
-The repository already requires local wallpaper rasterization through Chrome; automatic appearance support adds no new package dependency. Swift 6.2 and `swiftc` are present on the target host.
+Chrome is used only when a developer explicitly runs `bin/regenerate-system-wallpaper.sh --with-chrome`; it is not a deployment or runtime dependency. Swift 6.2 and `swiftc` are present on the target host.
 
-The backup/restore flow will boot out and remove `com.yorha.appearance-watcher`, its plist, binary, coordinator, state, logs, runtime wallpaper directory, and generated crest variants. It will then restore the pre-install wallpaper and existing desktop configuration as it does today. Cleanup targets are explicit paths beneath `~/.config/yorha/` and `~/Library/LaunchAgents/`.
+The backup/restore flow will boot out and remove `com.yorha.appearance-watcher`, its plist, binary, coordinator, appearance state, logs, copied dynamic HEIC, and copied crest variants. It will then restore the pre-install wallpaper and existing desktop configuration as it does today. Cleanup targets are explicit paths beneath `~/.config/yorha/` and `~/Library/LaunchAgents/`.
 
 ## Verification strategy
 
@@ -181,22 +180,24 @@ Static verification:
 - `bash -n` for modified shell scripts.
 - `plutil -lint` for the LaunchAgent.
 - SVG/XML parsing for both wallpaper sources.
-- Pixel-dimension and RGBA checks for both wallpaper and crest rasters.
+- Image I/O inspection proving one HEIC has exactly two 5120×2880 frames and `apple_desktop:apr` maps `l:0,d:1`; RGBA and dimension checks for both crest rasters.
+- Regression checks proving the normal wallpaper consumer, deployment, watcher, and coordinator do not invoke Chrome or the developer regeneration command.
 - Palette consistency checks across shell, CSS, SVG, and SketchyBar mappings.
 - Search confirming the new appearance pipeline contains no Ghostty mutation or reload command.
 
 Behavioral verification:
 
-1. Record the effective system mode, current wallpaper, live SketchyBar values, and Ghostty checksums.
-2. Apply forced Light mode without changing the macOS appearance setting; verify the light raster, ink crest/labels, and coordinator state.
-3. Apply forced Dark mode; verify the dark raster, amber crest/wordmark, bone date/time labels, and coordinator state.
-4. Verify widget styles contain both media-query paths and that a theme switch does not reload widget modules.
-5. Reapply the same mode and verify it is a no-op.
-6. Terminate the watcher and verify launchd restarts it.
-7. Restore the effective system mode and confirm the matching desktop state.
-8. Confirm all recorded Ghostty checksums are unchanged.
+1. Record the effective system mode, assigned wallpaper path, live SketchyBar values, and Ghostty checksums.
+2. Deploy and verify every desktop points at the copied `yorha-system.heic` runtime path.
+3. Apply forced Light mode without changing the macOS appearance setting; verify only ink crest/labels and coordinator state change, while the assigned wallpaper path remains unchanged.
+4. Apply forced Dark mode; verify amber crest/wordmark, bone date/time labels, coordinator state, and the same assigned wallpaper path.
+5. Verify widget styles contain both media-query paths and that the coordinator never reloads widget modules.
+6. Reapply the same mode and verify it is a no-op; force it and verify a retry occurs.
+7. Terminate the watcher and verify launchd restarts it.
+8. Restore SketchyBar to the effective system mode and confirm the assigned HEIC path is unchanged.
+9. Confirm all recorded Ghostty checksums are unchanged.
 
-Live tests may temporarily change the YoRHa wallpaper and bar, but they do not change the macOS appearance setting. The final test step restores the desktop to the system's effective mode.
+Live tests may temporarily change the bar, but they do not change the macOS appearance setting or force a HEIC frame. The final test step restores SketchyBar to the system's effective mode; macOS remains the only wallpaper-frame selector.
 
 ## Acceptance criteria
 
@@ -206,6 +207,6 @@ Live tests may temporarily change the YoRHa wallpaper and bar, but they do not c
 - The switch is prompt, does not flash an intermediate palette, and does not replay widget entrance animations.
 - Sleep/wake and watcher restart converge on the effective appearance.
 - Partial failures are logged and retryable.
-- The wallpaper remains correct on every desktop and does not regress to a cached obsolete raster.
+- Every desktop retains the single assigned dynamic HEIC path, and macOS selects its correct Light/Dark frame natively.
 - Ghostty stays dark and all Ghostty configuration checksums remain unchanged.
 - Repeated deployment and restoration are safe and leave no duplicate LaunchAgent jobs or stale runtime assets.
