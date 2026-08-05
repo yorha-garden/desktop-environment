@@ -127,6 +127,7 @@ class DeploymentSandboxTests(unittest.TestCase):
         text = (ROOT / "bin/deploy.sh").read_text()
         block = text.split("# --- appearance runtime BEGIN", 1)[1].split(
             "# --- appearance runtime END", 1)[0]
+        self.block = block
         self.script.write_text(
             '#!/usr/bin/env bash\nset -euo pipefail\nREPO="$TEST_REPO"\n'
             "say() { printf '  %s\\n' \"$*\"; }\n" + block)
@@ -138,6 +139,7 @@ class DeploymentSandboxTests(unittest.TestCase):
             "TEST_REPO": str(ROOT),
             "YORHA_PLUTIL": str(self.fake_bin / "plutil"),
             "YORHA_SIGNAL_READY": str(self.base / "signal-ready"),
+            "YORHA_TRAP_LOG": str(self.base / "trap.log"),
         })
         self.write_stub("cp", r'''#!/bin/bash
 if [ "${YORHA_DEPLOY_FAIL:-}" = cp ] && [[ "$1" == */assets/yorha-system.heic ]]; then
@@ -201,6 +203,30 @@ exec /usr/bin/plutil "$@"
     def pending_temps(self):
         return list(self.home.rglob("*.tmp.*"))
 
+    def make_trap_script(self):
+        path = self.base / "appearance-runtime-with-traps.sh"
+        path.write_text(r'''#!/usr/bin/env bash
+set -euo pipefail
+REPO="$TEST_REPO"
+say() { printf '  %s\n' "$*"; }
+trap 'printf "prior-exit\n" >> "$YORHA_TRAP_LOG"' EXIT
+trap 'printf "prior-hup\n" >> "$YORHA_TRAP_LOG"' HUP
+trap 'printf "prior-int\n" >> "$YORHA_TRAP_LOG"' INT
+trap 'printf "prior-term\n" >> "$YORHA_TRAP_LOG"' TERM
+EXPECTED_EXIT_TRAP="$(trap -p EXIT)"
+EXPECTED_HUP_TRAP="$(trap -p HUP)"
+EXPECTED_INT_TRAP="$(trap -p INT)"
+EXPECTED_TERM_TRAP="$(trap -p TERM)"
+''' + self.block + r'''
+[ "$(trap -p EXIT)" = "$EXPECTED_EXIT_TRAP" ] || exit 81
+[ "$(trap -p HUP)" = "$EXPECTED_HUP_TRAP" ] || exit 82
+[ "$(trap -p INT)" = "$EXPECTED_INT_TRAP" ] || exit 83
+[ "$(trap -p TERM)" = "$EXPECTED_TERM_TRAP" ] || exit 84
+printf 'after-block\n' >> "$YORHA_TRAP_LOG"
+''')
+        path.chmod(0o755)
+        return path
+
     def test_special_home_renders_exact_parseable_runtime_plist(self):
         result = self.run_block()
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -249,6 +275,37 @@ exec /usr/bin/plutil "$@"
         self.assertTrue(ready.exists(), "sandbox did not reach watcher compilation")
         os.killpg(process.pid, signal.SIGTERM)
         process.communicate(timeout=5)
-        self.assertNotEqual(process.returncode, 0)
+        self.assertEqual(process.returncode, -signal.SIGTERM)
         self.assertEqual(watcher.read_text(), "prior-signal")
+        self.assertEqual(self.pending_temps(), [])
+
+    def test_normal_completion_restores_exact_prior_traps(self):
+        result = subprocess.run(["/bin/bash", str(self.make_trap_script())], cwd=ROOT,
+                                env=self.env, text=True, capture_output=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        trap_log = Path(self.env["YORHA_TRAP_LOG"])
+        self.assertEqual(trap_log.read_text().splitlines(), ["after-block", "prior-exit"])
+
+    def test_signal_cleans_then_dispatches_prior_handler_and_stops(self):
+        watcher = self.home / ".config/yorha/bin/yorha-appearance-watcher"
+        watcher.parent.mkdir(parents=True, exist_ok=True)
+        watcher.write_text("prior-chained-signal")
+        env = self.env.copy()
+        env["YORHA_DEPLOY_FAIL"] = "signal"
+        process = subprocess.Popen(["/bin/bash", str(self.make_trap_script())], cwd=ROOT,
+                                   env=env, text=True, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, start_new_session=True)
+        deadline = time.monotonic() + 5
+        ready = Path(self.env["YORHA_SIGNAL_READY"])
+        while not ready.exists() and process.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.02)
+        self.assertTrue(ready.exists(), "sandbox did not reach watcher compilation")
+        os.killpg(process.pid, signal.SIGTERM)
+        process.communicate(timeout=5)
+        self.assertNotEqual(process.returncode, 0)
+        trap_log = Path(self.env["YORHA_TRAP_LOG"])
+        lines = trap_log.read_text().splitlines() if trap_log.exists() else []
+        self.assertEqual(lines, ["prior-term", "prior-exit"])
+        self.assertNotIn("after-block", lines)
+        self.assertEqual(watcher.read_text(), "prior-chained-signal")
         self.assertEqual(self.pending_temps(), [])

@@ -51,6 +51,27 @@ mkdir -p "$APPEARANCE" "$YORHA_BIN" "$HOME/.config/yorha/logs" \
 INSTALL_TMP=""
 WATCHER_TMP=""
 PLIST_TMP=""
+PRIOR_EXIT_TRAP="$(trap -p EXIT)"
+PRIOR_HUP_TRAP="$(trap -p HUP)"
+PRIOR_INT_TRAP="$(trap -p INT)"
+PRIOR_TERM_TRAP="$(trap -p TERM)"
+
+extract_appearance_trap_handler() {
+  local definition="$1"
+  local captured=""
+  trap() {
+    [ "$1" != -- ] || shift
+    captured="$1"
+  }
+  eval "$definition"
+  unset -f trap
+  printf '%s' "$captured"
+}
+
+PRIOR_EXIT_HANDLER="$(extract_appearance_trap_handler "$PRIOR_EXIT_TRAP")"
+PRIOR_HUP_HANDLER="$(extract_appearance_trap_handler "$PRIOR_HUP_TRAP")"
+PRIOR_INT_HANDLER="$(extract_appearance_trap_handler "$PRIOR_INT_TRAP")"
+PRIOR_TERM_HANDLER="$(extract_appearance_trap_handler "$PRIOR_TERM_TRAP")"
 
 cleanup_appearance_temps() {
   for pending in "$INSTALL_TMP" "$WATCHER_TMP" "$PLIST_TMP"; do
@@ -58,17 +79,72 @@ cleanup_appearance_temps() {
   done
 }
 
-abort_appearance_install() {
-  signal_status="$1"
-  trap - EXIT HUP INT TERM
+restore_appearance_trap() {
+  local definition="$1"
+  local signal_name="$2"
+  if [ -n "$definition" ]; then
+    eval "$definition"
+  else
+    trap - "$signal_name"
+  fi
+}
+
+restore_appearance_traps() {
+  restore_appearance_trap "$PRIOR_EXIT_TRAP" EXIT
+  restore_appearance_trap "$PRIOR_HUP_TRAP" HUP
+  restore_appearance_trap "$PRIOR_INT_TRAP" INT
+  restore_appearance_trap "$PRIOR_TERM_TRAP" TERM
+}
+
+dispatch_appearance_handler() {
+  local handler="$1"
+  [ -z "$handler" ] || eval "$handler"
+}
+
+finish_appearance_exit() {
+  local exit_status=$?
   cleanup_appearance_temps
+  restore_appearance_traps
+  if [ -n "$PRIOR_EXIT_TRAP" ]; then
+    dispatch_appearance_handler "$PRIOR_EXIT_HANDLER" || true
+  fi
+  trap - EXIT
+  exit "$exit_status"
+}
+
+abort_appearance_install() {
+  local signal_name="$1"
+  local signal_status="$2"
+  local prior_definition=""
+  local prior_handler=""
+  cleanup_appearance_temps
+  restore_appearance_traps
+  case "$signal_name" in
+    HUP)
+      prior_definition="$PRIOR_HUP_TRAP"
+      prior_handler="$PRIOR_HUP_HANDLER"
+      ;;
+    INT)
+      prior_definition="$PRIOR_INT_TRAP"
+      prior_handler="$PRIOR_INT_HANDLER"
+      ;;
+    TERM)
+      prior_definition="$PRIOR_TERM_TRAP"
+      prior_handler="$PRIOR_TERM_HANDLER"
+      ;;
+  esac
+  if [ -n "$prior_definition" ]; then
+    dispatch_appearance_handler "$prior_handler" || true
+    exit "$signal_status"
+  fi
+  kill -s "$signal_name" "$$"
   exit "$signal_status"
 }
 
-trap cleanup_appearance_temps EXIT
-trap 'abort_appearance_install 129' HUP
-trap 'abort_appearance_install 130' INT
-trap 'abort_appearance_install 143' TERM
+trap finish_appearance_exit EXIT
+trap 'abort_appearance_install HUP 129' HUP
+trap 'abort_appearance_install INT 130' INT
+trap 'abort_appearance_install TERM 143' TERM
 
 install_atomic() {
   source="$1"
@@ -125,7 +201,7 @@ else
 fi
 "$RUNTIME_COORDINATOR" "$MODE" --force \
   || say "appearance -> watcher installed; SketchyBar update will retry"
-trap - EXIT HUP INT TERM
+restore_appearance_traps
 # --- appearance runtime END
 
 # --- aerospace (installed but intentionally not running) -------------------
