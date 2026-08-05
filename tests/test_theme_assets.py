@@ -1,4 +1,4 @@
-import json, re, struct, subprocess, unittest, xml.etree.ElementTree as ET
+import hashlib, json, re, struct, subprocess, unittest, xml.etree.ElementTree as ET
 from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -39,3 +39,18 @@ class ThemeAssetTests(unittest.TestCase):
             "frames": [[5120, 2880], [5120, 2880]],
             "appearance": {"l": 0, "d": 1},
         })
+
+    def test_normal_wallpaper_consumer_keeps_chrome_developer_only(self):
+        consumer = (ROOT / "bin/make-wallpaper.sh").read_text()
+        regenerator = (ROOT / "bin/regenerate-system-wallpaper.sh").read_text()
+        self.assertNotIn("Chrome", consumer)
+        self.assertNotIn("regenerate-system-wallpaper", consumer)
+        self.assertRegex(regenerator, r'"\$1"\s*=\s*"--with-chrome"')
+        self.assertLess(regenerator.index('"--with-chrome"'),
+                        regenerator.index('"$CHROME" --headless'))
+
+    def test_verification_does_not_modify_committed_heic(self):
+        wallpaper = ROOT / "assets/yorha-system.heic"
+        before = hashlib.sha256(wallpaper.read_bytes()).digest()
+        subprocess.run([str(ROOT / "bin/make-wallpaper.sh"), "--verify"], check=True)
+        self.assertEqual(hashlib.sha256(wallpaper.read_bytes()).digest(), before)
