@@ -1,4 +1,4 @@
-import re, struct, subprocess, unittest, xml.etree.ElementTree as ET
+import json, re, struct, subprocess, unittest, xml.etree.ElementTree as ET
 from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -29,10 +29,13 @@ class ThemeAssetTests(unittest.TestCase):
         for name in ("yorha-icon-light.png", "yorha-icon-dark.png"):
             self.assertEqual(png_ihdr(ROOT / "assets" / name), (31, 36, 8, 6))
 
-    def test_hashed_paths(self):
-        for mode in ("light", "dark"):
-            result = subprocess.run([str(ROOT / "bin/make-wallpaper.sh"),
-                                     "--print-path", mode], check=True,
-                                    text=True, capture_output=True)
-            self.assertRegex(Path(result.stdout.strip()).name,
-                             rf"^wallpaper-{mode}-[0-9a-f]{{10}}\.png$")
+    def test_system_wallpaper_has_appearance_variants(self):
+        result = subprocess.run(
+            ["swift", str(ROOT / "bin/yorha-system-wallpaper.swift"), "--inspect",
+             str(ROOT / "assets/yorha-system.heic")],
+            check=True, text=True, capture_output=True)
+        self.assertEqual(json.loads(result.stdout), {
+            "frameCount": 2,
+            "frames": [[5120, 2880], [5120, 2880]],
+            "appearance": {"l": 0, "d": 1},
+        })
