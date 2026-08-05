@@ -5,26 +5,83 @@ usage() {
   echo "usage: $0 light|dark [--force]" >&2
 }
 
-[ "$#" -eq 1 ] || [ "$#" -eq 2 ] || {
-  usage
+internal_usage() {
   exit 64
 }
 
-MODE="$1"
-FORCE="${2:-}"
-case "$MODE" in
-  light | dark) ;;
-  *)
+TAB="$(printf '\t')"
+INTERNAL_OPERATION=""
+if [ "${1:-}" = "--internal-lock-operation" ]; then
+  [ "$#" -eq 7 ] || internal_usage
+  INTERNAL_OPERATION="$2"
+  ROOT="$3"
+  LOCK_CANDIDATE="$4"
+  LOCK_EXPECTED_PID="$5"
+  LOCK_START_IDENTITY="$6"
+  LOCK_TOKEN="$7"
+  case "$INTERNAL_OPERATION" in
+    acquire | cleanup) ;;
+    *) internal_usage ;;
+  esac
+  case "$ROOT" in
+    /*) ;;
+    *) internal_usage ;;
+  esac
+  [ "$ROOT" != "/" ] && [ "${ROOT%/}" = "$ROOT" ] \
+    && [ ! -L "$ROOT" ] && [ -d "$ROOT" ] || internal_usage
+  case "$LOCK_EXPECTED_PID" in
+    ''|0|0*|*[!0-9]*) internal_usage ;;
+  esac
+  case "$LOCK_START_IDENTITY" in
+    ''|*$'\t'*|*$'\r'*|*$'\n'*) internal_usage ;;
+  esac
+  case "$LOCK_TOKEN" in
+    ''|*[!0-9.]*) internal_usage ;;
+  esac
+  token_pid="${LOCK_TOKEN%%.*}"
+  token_tail="${LOCK_TOKEN#*.}"
+  token_time="${token_tail%%.*}"
+  token_random="${token_tail#*.}"
+  [ "$token_pid" = "$LOCK_EXPECTED_PID" ] \
+    && [ "$token_tail" != "$LOCK_TOKEN" ] \
+    && [ "$token_random" != "$token_tail" ] \
+    || internal_usage
+  case "$token_time:$token_random" in
+    *[!0-9:]*|:*|*:) internal_usage ;;
+  esac
+  [ "${YORHA_LOCK_PARENT_PID:-}" = "$LOCK_EXPECTED_PID" ] || internal_usage
+  [ "$LOCK_CANDIDATE" = "$ROOT/.apply.lock.candidate.$LOCK_TOKEN" ] \
+    && [ ! -L "$LOCK_CANDIDATE" ] && [ -f "$LOCK_CANDIDATE" ] \
+    || internal_usage
+  MODE=""
+  FORCE=""
+else
+  [ "$#" -eq 1 ] || [ "$#" -eq 2 ] || {
     usage
     exit 64
-    ;;
-esac
-[ -z "$FORCE" ] || [ "$FORCE" = "--force" ] || {
-  usage
-  exit 64
-}
+  }
 
-ROOT="${YORHA_APPEARANCE_ROOT:-$HOME/.config/yorha/appearance}"
+  MODE="$1"
+  FORCE="${2:-}"
+  case "$MODE" in
+    light | dark) ;;
+    *)
+      usage
+      exit 64
+      ;;
+  esac
+  [ -z "$FORCE" ] || [ "$FORCE" = "--force" ] || {
+    usage
+    exit 64
+  }
+
+  ROOT="${YORHA_APPEARANCE_ROOT:-$HOME/.config/yorha/appearance}"
+  LOCK_EXPECTED_PID="$$"
+  LOCK_START_IDENTITY=""
+  LOCK_TOKEN="$$.$(date +%s).$RANDOM"
+  LOCK_CANDIDATE="$ROOT/.apply.lock.candidate.$LOCK_TOKEN"
+fi
+
 STATE="$ROOT/last-successful-mode"
 LOCK="$ROOT/apply.lock"
 LIGHT_CREST="$ROOT/yorha-icon-light.png"
@@ -38,14 +95,9 @@ SKETCHYBAR_PID=""
 LOCK_OWNER_PID=""
 LOCK_OWNER_START=""
 LOCK_OWNER_TOKEN=""
-LOCK_START_IDENTITY=""
-LOCK_TOKEN="$$.$(date +%s).$RANDOM"
-LOCK_CANDIDATE="$ROOT/.apply.lock.candidate.$LOCK_TOKEN"
 LOCK_GUARD="$ROOT/.apply.lock.guard"
-SHLOCK="${YORHA_SHLOCK_BIN:-/usr/bin/shlock}"
-GUARD_OWNED=0
+LOCKF="${YORHA_LOCKF_BIN:-/usr/bin/lockf}"
 LOCK_STALE_GRACE_SECONDS=5
-TAB="$(printf '\t')"
 
 process_start_identity() {
   LC_ALL=C ps -p "$1" -o lstart= 2>/dev/null \
@@ -91,27 +143,6 @@ lock_is_stale() {
   [ $((lock_now - lock_modified)) -ge "$LOCK_STALE_GRACE_SECONDS" ]
 }
 
-guard_is_owned_by_self() {
-  [ ! -L "$LOCK_GUARD" ] && [ -f "$LOCK_GUARD" ] || return 1
-  guard_pid="$(tr -d '[:space:]' < "$LOCK_GUARD")"
-  [ "$guard_pid" = "$$" ]
-}
-
-acquire_reclaimer_guard() {
-  if "$SHLOCK" -f "$LOCK_GUARD" -p "$$"; then
-    GUARD_OWNED=1
-    return 0
-  fi
-  return 1
-}
-
-release_reclaimer_guard() {
-  if [ "$GUARD_OWNED" -eq 1 ]; then
-    guard_is_owned_by_self && rm -f "$LOCK_GUARD"
-    GUARD_OWNED=0
-  fi
-}
-
 reclaim_stale_lock() {
   [ -e "$LOCK" ] || [ -L "$LOCK" ] || return 0
   if read_lock_owner "$LOCK"; then
@@ -142,7 +173,8 @@ prepare_lock_candidate() {
   (umask 077
     set -C
     printf 'pid\t%s\nstart\t%s\ntoken\t%s\n' \
-      "$$" "$LOCK_START_IDENTITY" "$LOCK_TOKEN" > "$LOCK_CANDIDATE"
+      "$LOCK_EXPECTED_PID" "$LOCK_START_IDENTITY" "$LOCK_TOKEN" \
+      > "$LOCK_CANDIDATE"
   )
 }
 
@@ -159,9 +191,48 @@ lock_is_owned_by_self() {
     && [ -f "$LOCK_CANDIDATE" ] && [ "$LOCK" -ef "$LOCK_CANDIDATE" ] \
     || return 1
   read_lock_owner "$LOCK_CANDIDATE" || return 1
-  [ "$LOCK_OWNER_PID" = "$$" ] \
+  [ "$LOCK_OWNER_PID" = "$LOCK_EXPECTED_PID" ] \
     && [ "$LOCK_OWNER_START" = "$LOCK_START_IDENTITY" ] \
     && [ "$LOCK_OWNER_TOKEN" = "$LOCK_TOKEN" ]
+}
+
+perform_internal_lock_operation() {
+  case "$INTERNAL_OPERATION" in
+    acquire)
+      read_lock_owner "$LOCK_CANDIDATE" \
+        && [ "$LOCK_OWNER_PID" = "$LOCK_EXPECTED_PID" ] \
+        && [ "$LOCK_OWNER_START" = "$LOCK_START_IDENTITY" ] \
+        && [ "$LOCK_OWNER_TOKEN" = "$LOCK_TOKEN" ] \
+        || return 1
+      internal_owner_start="$(process_start_identity "$LOCK_EXPECTED_PID")"
+      [ -n "$internal_owner_start" ] \
+        && [ "$internal_owner_start" = "$LOCK_START_IDENTITY" ] \
+        || return 1
+      publish_lock_candidate
+      internal_status=$?
+      if [ "$internal_status" -ne 0 ] && reclaim_stale_lock; then
+        publish_lock_candidate
+        internal_status=$?
+      fi
+      return "$internal_status"
+      ;;
+    cleanup)
+      lock_is_owned_by_self && rm -f "$LOCK"
+      return 0
+      ;;
+  esac
+  return 64
+}
+
+if [ -n "$INTERNAL_OPERATION" ]; then
+  perform_internal_lock_operation
+  exit $?
+fi
+
+run_guarded_lock_operation() {
+  YORHA_LOCK_PARENT_PID="$$" "$LOCKF" -s -t 0 -k "$LOCK_GUARD" \
+    "$0" --internal-lock-operation "$1" "$ROOT" "$LOCK_CANDIDATE" \
+    "$LOCK_EXPECTED_PID" "$LOCK_START_IDENTITY" "$LOCK_TOKEN"
 }
 
 cleanup() {
@@ -171,18 +242,13 @@ cleanup() {
   fi
   if [ "$LOCK_OWNED" -eq 1 ]; then
     cleanup_guard_attempt=0
-    while [ "$GUARD_OWNED" -ne 1 ] && ! acquire_reclaimer_guard; do
+    while ! run_guarded_lock_operation cleanup; do
       cleanup_guard_attempt=$((cleanup_guard_attempt + 1))
       [ "$cleanup_guard_attempt" -lt 100 ] || break
       /bin/sleep 0.01
     done
-    if [ "$GUARD_OWNED" -eq 1 ]; then
-      lock_is_owned_by_self && rm -f "$LOCK"
-      release_reclaimer_guard
-    fi
     LOCK_OWNED=0
   fi
-  release_reclaimer_guard
   rm -f "$LOCK_CANDIDATE"
 }
 
@@ -235,8 +301,8 @@ if [ -z "$LOCK_START_IDENTITY" ]; then
   echo "could not determine appearance lock owner identity" >&2
   exit 1
 fi
-if [ ! -x "$SHLOCK" ]; then
-  echo "missing atomic lock helper: $SHLOCK" >&2
+if [ ! -x "$LOCKF" ]; then
+  echo "missing atomic lock helper: $LOCKF" >&2
   exit 1
 fi
 if ! prepare_lock_candidate; then
@@ -247,18 +313,10 @@ fi
 attempt=0
 while :; do
   LOCK_ACQUISITION_PENDING=1
-  publish_status=1
-  if acquire_reclaimer_guard; then
-    publish_lock_candidate
-    publish_status=$?
-    if [ "$publish_status" -ne 0 ] && reclaim_stale_lock; then
-      publish_lock_candidate
-      publish_status=$?
-    fi
-    if [ "$publish_status" -eq 0 ]; then
-      LOCK_OWNED=1
-    fi
-    release_reclaimer_guard
+  run_guarded_lock_operation acquire
+  publish_status=$?
+  if [ "$publish_status" -eq 0 ]; then
+    LOCK_OWNED=1
   fi
   LOCK_ACQUISITION_PENDING=0
   if [ "$PENDING_SIGNAL_STATUS" -ne 0 ]; then

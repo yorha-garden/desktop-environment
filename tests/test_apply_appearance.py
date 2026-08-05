@@ -22,6 +22,7 @@ class ApplyAppearanceTests(unittest.TestCase):
         self.dark_crest.touch()
         self.state = self.appearance_root / "last-successful-mode"
         self.lock = self.appearance_root / "apply.lock"
+        self.guard = self.appearance_root / ".apply.lock.guard"
         self.call_log = Path(self.tempdir.name) / "sketchybar-calls.bin"
         self.sketchybar = Path(self.tempdir.name) / "sketchybar"
         self.write_sketchybar()
@@ -183,8 +184,16 @@ if [ ! -e "$YORHA_TEST_PAUSE_MARKER" ]; then
 fi
 exec /usr/bin/shlock "$@"
 ''')
+        (fake_bin / "lockf").write_text(r'''#!/usr/bin/env bash
+if [ ! -e "$YORHA_TEST_PAUSE_MARKER" ]; then
+  : > "$YORHA_TEST_PAUSE_MARKER"
+  : > "$YORHA_TEST_PUBLICATION_READY"
+  while [ ! -e "$YORHA_TEST_PUBLICATION_RELEASE" ]; do /bin/sleep 0.01; done
+fi
+exec /usr/bin/lockf "$@"
+''')
         (fake_bin / "sleep").write_text("#!/usr/bin/env bash\nexit 0\n")
-        for tool in ("mkdir", "ln", "shlock", "sleep"):
+        for tool in ("mkdir", "ln", "shlock", "lockf", "sleep"):
             (fake_bin / tool).chmod(0o755)
         return {
             "PATH": f"{fake_bin}:{os.environ['PATH']}",
@@ -193,6 +202,7 @@ exec /usr/bin/shlock "$@"
             "YORHA_TEST_PUBLICATION_READY": str(ready),
             "YORHA_TEST_PUBLICATION_RELEASE": str(release),
             "YORHA_SHLOCK_BIN": str(fake_bin / "shlock"),
+            "YORHA_LOCKF_BIN": str(fake_bin / "lockf"),
         }
 
     def lock_snapshot(self):
@@ -201,7 +211,9 @@ exec /usr/bin/shlock "$@"
         return (stat.st_dev, stat.st_ino, owner.read_bytes())
 
     def assert_no_internal_lock_residue(self):
-        self.assertFalse((self.appearance_root / ".apply.lock.guard").exists())
+        self.assertFalse(self.guard.is_symlink())
+        if self.guard.exists():
+            self.assertTrue(self.guard.is_file())
         self.assertEqual(
             list(self.appearance_root.glob(".apply.lock.candidate.*")), []
         )
@@ -299,6 +311,67 @@ exec /usr/bin/shlock "$@"
         self.assertEqual(result.returncode, 75)
         self.assertTrue(self.lock.is_file())
         self.assertEqual(self.call_argvs(), [])
+
+    def test_pid_like_guard_contents_never_wedge_an_unlocked_guard(self):
+        cases = (
+            ("current", f"{os.getpid()}\n"),
+            ("reused-live", f"{os.getppid()}\n"),
+            ("dead", "999999\n"),
+            ("malformed", "12x34\n"),
+        )
+        for name, contents in cases:
+            with self.subTest(name=name):
+                self.guard.write_text(contents)
+                self.state.unlink(missing_ok=True)
+                self.call_log.unlink(missing_ok=True)
+
+                result = self.run_apply("dark", extra_env=self.fast_sleep_env())
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(self.call_argvs(), [self.expected_argv("dark")])
+                self.assertFalse(self.lock.exists())
+                self.assert_no_internal_lock_residue()
+
+    def test_kernel_guard_releases_on_holder_death(self):
+        holder = subprocess.Popen([
+            "/usr/bin/lockf", "-s", "-t", "0", "-k", str(self.guard),
+            "/bin/sleep", "30",
+        ])
+        try:
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                probe = subprocess.run([
+                    "/usr/bin/lockf", "-s", "-t", "0", "-k",
+                    str(self.guard), "/usr/bin/true",
+                ], check=False)
+                if probe.returncode == 75:
+                    break
+                if holder.poll() is not None:
+                    self.fail(f"kernel guard holder exited {holder.returncode}")
+                time.sleep(0.01)
+            else:
+                self.fail("kernel guard holder never acquired its lock")
+
+            blocked = self.run_apply("dark", extra_env=self.fast_sleep_env())
+
+            self.assertEqual(blocked.returncode, 75, blocked.stderr)
+            self.assertEqual(self.call_argvs(), [])
+            self.assertFalse(self.lock.exists())
+            self.assertFalse(self.state.exists())
+            self.assertIsNone(holder.poll())
+
+            holder.kill()
+            holder.wait(timeout=2)
+            recovered = self.run_apply("dark")
+
+            self.assertEqual(recovered.returncode, 0, recovered.stderr)
+            self.assertEqual(self.call_argvs(), [self.expected_argv("dark")])
+            self.assertFalse(self.lock.exists())
+            self.assert_no_internal_lock_residue()
+        finally:
+            if holder.poll() is None:
+                holder.kill()
+                holder.wait(timeout=2)
 
     def test_dead_and_reused_pid_lock_owners_are_reclaimed(self):
         cases = (
@@ -430,7 +503,8 @@ exec /usr/bin/shlock "$@"
                 'destination="${!#}"',
                 'if [ "$destination" = "$YORHA_TEST_LOCK_PATH" ]; then',
                 publish_command,
-                '  kill -INT "$PPID"',
+                '  target_pid="${YORHA_LOCK_PARENT_PID:-$PPID}"',
+                '  kill -INT "$target_pid"',
                 f"  exit {exit_code}",
                 "fi",
                 'exec /bin/ln "$@"',
@@ -450,7 +524,7 @@ exec /usr/bin/shlock "$@"
         first_signal, second_signal = signals
         signal_commands = "\n".join(
             (
-                '  target_pid="$PPID"',
+                '  target_pid="${YORHA_LOCK_PARENT_PID:-$PPID}"',
                 f'  kill -{first_signal} "$target_pid"',
                 "  ( /bin/sleep 0.05; "
                 f'kill -{second_signal} "$target_pid" 2>/dev/null || true ) &',
