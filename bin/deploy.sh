@@ -96,55 +96,42 @@ restore_appearance_traps() {
   restore_appearance_trap "$PRIOR_TERM_TRAP" TERM
 }
 
-dispatch_appearance_handler() {
-  local handler="$1"
-  [ -z "$handler" ] || eval "$handler"
-}
-
-finish_appearance_exit() {
-  local exit_status=$?
+prepare_appearance_exit() {
   cleanup_appearance_temps
   restore_appearance_traps
-  if [ -n "$PRIOR_EXIT_TRAP" ]; then
-    dispatch_appearance_handler "$PRIOR_EXIT_HANDLER" || true
-  fi
-  trap - EXIT
-  exit "$exit_status"
 }
 
-abort_appearance_install() {
-  local signal_name="$1"
-  local signal_status="$2"
-  local prior_definition=""
-  local prior_handler=""
+prepare_appearance_signal() {
+  YORHA_APPEARANCE_SIGNAL_NAME="$1"
+  YORHA_APPEARANCE_SIGNAL_EXIT_STATUS="$2"
+  YORHA_APPEARANCE_PRIOR_SIGNAL_DEFINITION=""
+  YORHA_APPEARANCE_PRIOR_SIGNAL_HANDLER=""
   cleanup_appearance_temps
   restore_appearance_traps
-  case "$signal_name" in
+  case "$YORHA_APPEARANCE_SIGNAL_NAME" in
     HUP)
-      prior_definition="$PRIOR_HUP_TRAP"
-      prior_handler="$PRIOR_HUP_HANDLER"
+      YORHA_APPEARANCE_PRIOR_SIGNAL_DEFINITION="$PRIOR_HUP_TRAP"
+      YORHA_APPEARANCE_PRIOR_SIGNAL_HANDLER="$PRIOR_HUP_HANDLER"
       ;;
     INT)
-      prior_definition="$PRIOR_INT_TRAP"
-      prior_handler="$PRIOR_INT_HANDLER"
+      YORHA_APPEARANCE_PRIOR_SIGNAL_DEFINITION="$PRIOR_INT_TRAP"
+      YORHA_APPEARANCE_PRIOR_SIGNAL_HANDLER="$PRIOR_INT_HANDLER"
       ;;
     TERM)
-      prior_definition="$PRIOR_TERM_TRAP"
-      prior_handler="$PRIOR_TERM_HANDLER"
+      YORHA_APPEARANCE_PRIOR_SIGNAL_DEFINITION="$PRIOR_TERM_TRAP"
+      YORHA_APPEARANCE_PRIOR_SIGNAL_HANDLER="$PRIOR_TERM_HANDLER"
       ;;
   esac
-  if [ -n "$prior_definition" ]; then
-    dispatch_appearance_handler "$prior_handler" || true
-    exit "$signal_status"
-  fi
-  kill -s "$signal_name" "$$"
-  exit "$signal_status"
 }
 
-trap finish_appearance_exit EXIT
-trap 'abort_appearance_install HUP 129' HUP
-trap 'abort_appearance_install INT 130' INT
-trap 'abort_appearance_install TERM 143' TERM
+yorha_appearance_return_dispatch_status() {
+  return "$YORHA_APPEARANCE_DISPATCH_STATUS"
+}
+
+trap 'YORHA_APPEARANCE_EXIT_STATUS=$?; prepare_appearance_exit; if [ -n "$PRIOR_EXIT_TRAP" ]; then YORHA_APPEARANCE_DISPATCH_STATUS="$YORHA_APPEARANCE_EXIT_STATUS"; yorha_appearance_return_dispatch_status || eval "$PRIOR_EXIT_HANDLER"; fi; trap - EXIT; exit "$YORHA_APPEARANCE_EXIT_STATUS"' EXIT
+trap 'YORHA_APPEARANCE_SIGNAL_CONTEXT_STATUS=$?; prepare_appearance_signal HUP 129; if [ -n "$YORHA_APPEARANCE_PRIOR_SIGNAL_DEFINITION" ]; then if [ -n "$YORHA_APPEARANCE_PRIOR_SIGNAL_HANDLER" ]; then YORHA_APPEARANCE_DISPATCH_STATUS="$YORHA_APPEARANCE_SIGNAL_CONTEXT_STATUS"; yorha_appearance_return_dispatch_status || eval "$YORHA_APPEARANCE_PRIOR_SIGNAL_HANDLER"; fi; exit "$YORHA_APPEARANCE_SIGNAL_EXIT_STATUS"; fi; kill -s "$YORHA_APPEARANCE_SIGNAL_NAME" "$$"; exit "$YORHA_APPEARANCE_SIGNAL_EXIT_STATUS"' HUP
+trap 'YORHA_APPEARANCE_SIGNAL_CONTEXT_STATUS=$?; prepare_appearance_signal INT 130; if [ -n "$YORHA_APPEARANCE_PRIOR_SIGNAL_DEFINITION" ]; then if [ -n "$YORHA_APPEARANCE_PRIOR_SIGNAL_HANDLER" ]; then YORHA_APPEARANCE_DISPATCH_STATUS="$YORHA_APPEARANCE_SIGNAL_CONTEXT_STATUS"; yorha_appearance_return_dispatch_status || eval "$YORHA_APPEARANCE_PRIOR_SIGNAL_HANDLER"; fi; exit "$YORHA_APPEARANCE_SIGNAL_EXIT_STATUS"; fi; kill -s "$YORHA_APPEARANCE_SIGNAL_NAME" "$$"; exit "$YORHA_APPEARANCE_SIGNAL_EXIT_STATUS"' INT
+trap 'YORHA_APPEARANCE_SIGNAL_CONTEXT_STATUS=$?; prepare_appearance_signal TERM 143; if [ -n "$YORHA_APPEARANCE_PRIOR_SIGNAL_DEFINITION" ]; then if [ -n "$YORHA_APPEARANCE_PRIOR_SIGNAL_HANDLER" ]; then YORHA_APPEARANCE_DISPATCH_STATUS="$YORHA_APPEARANCE_SIGNAL_CONTEXT_STATUS"; yorha_appearance_return_dispatch_status || eval "$YORHA_APPEARANCE_PRIOR_SIGNAL_HANDLER"; fi; exit "$YORHA_APPEARANCE_SIGNAL_EXIT_STATUS"; fi; kill -s "$YORHA_APPEARANCE_SIGNAL_NAME" "$$"; exit "$YORHA_APPEARANCE_SIGNAL_EXIT_STATUS"' TERM
 
 install_atomic() {
   source="$1"

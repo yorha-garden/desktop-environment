@@ -209,10 +209,11 @@ exec /usr/bin/plutil "$@"
 set -euo pipefail
 REPO="$TEST_REPO"
 say() { printf '  %s\n' "$*"; }
-trap 'printf "prior-exit\n" >> "$YORHA_TRAP_LOG"' EXIT
-trap 'printf "prior-hup\n" >> "$YORHA_TRAP_LOG"' HUP
-trap 'printf "prior-int\n" >> "$YORHA_TRAP_LOG"' INT
-trap 'printf "prior-term\n" >> "$YORHA_TRAP_LOG"' TERM
+handler=outer-handler
+trap 'printf "prior-exit:%s:%s\n" "$?" "$handler" >> "$YORHA_TRAP_LOG"' EXIT
+trap 'printf "prior-hup:%s:%s\n" "$?" "$handler" >> "$YORHA_TRAP_LOG"' HUP
+trap 'printf "prior-int:%s:%s\n" "$?" "$handler" >> "$YORHA_TRAP_LOG"' INT
+trap 'printf "prior-term:%s:%s\n" "$?" "$handler" >> "$YORHA_TRAP_LOG"' TERM
 EXPECTED_EXIT_TRAP="$(trap -p EXIT)"
 EXPECTED_HUP_TRAP="$(trap -p HUP)"
 EXPECTED_INT_TRAP="$(trap -p INT)"
@@ -226,6 +227,54 @@ printf 'after-block\n' >> "$YORHA_TRAP_LOG"
 ''')
         path.chmod(0o755)
         return path
+
+    def make_ignored_signal_script(self):
+        path = self.base / "appearance-runtime-ignore-term.sh"
+        path.write_text(r'''#!/usr/bin/env bash
+set -euo pipefail
+REPO="$TEST_REPO"
+say() { printf '  %s\n' "$*"; }
+handler=outer-handler
+trap 'printf "prior-exit:%s:%s\n" "$?" "$handler" >> "$YORHA_TRAP_LOG"' EXIT
+trap '' TERM
+''' + self.block + r'''
+printf 'after-block\n' >> "$YORHA_TRAP_LOG"
+''')
+        path.chmod(0o755)
+        return path
+
+    def make_recursive_signal_script(self):
+        path = self.base / "appearance-runtime-recursive-term.sh"
+        path.write_text(r'''#!/usr/bin/env bash
+set -euo pipefail
+REPO="$TEST_REPO"
+say() { printf '  %s\n' "$*"; }
+handler=outer-handler
+trap 'printf "prior-term:%s:%s\n" "$?" "$handler" >> "$YORHA_TRAP_LOG"; trap - TERM; kill -s TERM "$$"' TERM
+''' + self.block + r'''
+printf 'after-block\n' >> "$YORHA_TRAP_LOG"
+''')
+        path.chmod(0o755)
+        return path
+
+    def signal_block(self, script, signum):
+        ready = Path(self.env["YORHA_SIGNAL_READY"])
+        trap_log = Path(self.env["YORHA_TRAP_LOG"])
+        ready.unlink(missing_ok=True)
+        trap_log.unlink(missing_ok=True)
+        env = self.env.copy()
+        env["YORHA_DEPLOY_FAIL"] = "signal"
+        process = subprocess.Popen(["/bin/bash", str(script)], cwd=ROOT, env=env,
+                                   text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   start_new_session=True)
+        deadline = time.monotonic() + 5
+        while not ready.exists() and process.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.02)
+        self.assertTrue(ready.exists(), "sandbox did not reach watcher compilation")
+        os.killpg(process.pid, signum)
+        process.communicate(timeout=5)
+        lines = trap_log.read_text().splitlines() if trap_log.exists() else []
+        return process.returncode, lines
 
     def test_special_home_renders_exact_parseable_runtime_plist(self):
         result = self.run_block()
@@ -263,19 +312,8 @@ printf 'after-block\n' >> "$YORHA_TRAP_LOG"
         watcher = self.home / ".config/yorha/bin/yorha-appearance-watcher"
         watcher.parent.mkdir(parents=True, exist_ok=True)
         watcher.write_text("prior-signal")
-        env = self.env.copy()
-        env["YORHA_DEPLOY_FAIL"] = "signal"
-        process = subprocess.Popen(["/bin/bash", str(self.script)], cwd=ROOT, env=env,
-                                   text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                   start_new_session=True)
-        deadline = time.monotonic() + 5
-        ready = Path(self.env["YORHA_SIGNAL_READY"])
-        while not ready.exists() and process.poll() is None and time.monotonic() < deadline:
-            time.sleep(0.02)
-        self.assertTrue(ready.exists(), "sandbox did not reach watcher compilation")
-        os.killpg(process.pid, signal.SIGTERM)
-        process.communicate(timeout=5)
-        self.assertEqual(process.returncode, -signal.SIGTERM)
+        returncode, _ = self.signal_block(self.script, signal.SIGTERM)
+        self.assertEqual(returncode, -signal.SIGTERM)
         self.assertEqual(watcher.read_text(), "prior-signal")
         self.assertEqual(self.pending_temps(), [])
 
@@ -284,28 +322,49 @@ printf 'after-block\n' >> "$YORHA_TRAP_LOG"
                                 env=self.env, text=True, capture_output=True, timeout=15)
         self.assertEqual(result.returncode, 0, result.stderr)
         trap_log = Path(self.env["YORHA_TRAP_LOG"])
-        self.assertEqual(trap_log.read_text().splitlines(), ["after-block", "prior-exit"])
+        self.assertEqual(trap_log.read_text().splitlines(),
+                         ["after-block", "prior-exit:0:outer-handler"])
+
+    def test_failed_block_preserves_exit_status_and_outer_handler_variable(self):
+        env = self.env.copy()
+        env["YORHA_DEPLOY_FAIL"] = "cp"
+        result = subprocess.run(["/bin/bash", str(self.make_trap_script())], cwd=ROOT,
+                                env=env, text=True, capture_output=True, timeout=15)
+        self.assertEqual(result.returncode, 91, result.stderr)
+        trap_log = Path(self.env["YORHA_TRAP_LOG"])
+        self.assertEqual(trap_log.read_text().splitlines(),
+                         ["prior-exit:91:outer-handler"])
+        self.assertEqual(self.pending_temps(), [])
 
     def test_signal_cleans_then_dispatches_prior_handler_and_stops(self):
         watcher = self.home / ".config/yorha/bin/yorha-appearance-watcher"
         watcher.parent.mkdir(parents=True, exist_ok=True)
         watcher.write_text("prior-chained-signal")
-        env = self.env.copy()
-        env["YORHA_DEPLOY_FAIL"] = "signal"
-        process = subprocess.Popen(["/bin/bash", str(self.make_trap_script())], cwd=ROOT,
-                                   env=env, text=True, stdout=subprocess.PIPE,
-                                   stderr=subprocess.PIPE, start_new_session=True)
-        deadline = time.monotonic() + 5
-        ready = Path(self.env["YORHA_SIGNAL_READY"])
-        while not ready.exists() and process.poll() is None and time.monotonic() < deadline:
-            time.sleep(0.02)
-        self.assertTrue(ready.exists(), "sandbox did not reach watcher compilation")
-        os.killpg(process.pid, signal.SIGTERM)
-        process.communicate(timeout=5)
-        self.assertNotEqual(process.returncode, 0)
-        trap_log = Path(self.env["YORHA_TRAP_LOG"])
-        lines = trap_log.read_text().splitlines() if trap_log.exists() else []
-        self.assertEqual(lines, ["prior-term", "prior-exit"])
+        cases = ((signal.SIGHUP, "hup"), (signal.SIGINT, "int"),
+                 (signal.SIGTERM, "term"))
+        for signum, name in cases:
+            with self.subTest(signal=name):
+                watcher.write_text("prior-chained-signal")
+                returncode, lines = self.signal_block(self.make_trap_script(), signum)
+                expected_status = 128 + signum
+                self.assertEqual(returncode, expected_status)
+                self.assertEqual(lines, [
+                    f"prior-{name}:{expected_status}:outer-handler",
+                    f"prior-exit:{expected_status}:outer-handler",
+                ])
+                self.assertNotIn("after-block", lines)
+                self.assertEqual(watcher.read_text(), "prior-chained-signal")
+                self.assertEqual(self.pending_temps(), [])
+
+    def test_ignored_term_is_not_dispatched_and_does_not_continue(self):
+        returncode, lines = self.signal_block(self.make_ignored_signal_script(), signal.SIGTERM)
+        self.assertEqual(returncode, 143)
+        self.assertEqual(lines, ["prior-exit:143:outer-handler"])
         self.assertNotIn("after-block", lines)
-        self.assertEqual(watcher.read_text(), "prior-chained-signal")
+        self.assertEqual(self.pending_temps(), [])
+
+    def test_guarded_recursive_term_handler_runs_once_without_loop(self):
+        returncode, lines = self.signal_block(self.make_recursive_signal_script(), signal.SIGTERM)
+        self.assertEqual(returncode, -signal.SIGTERM)
+        self.assertEqual(lines, ["prior-term:143:outer-handler"])
         self.assertEqual(self.pending_temps(), [])
