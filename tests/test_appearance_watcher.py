@@ -29,6 +29,18 @@ class AppearanceWatcherIntegrationTests(unittest.TestCase):
                 text=True,
             )
             cls.binaries[name] = binary
+        cls.notification_poster = cls.temp / "post-appearance-notification"
+        poster_source = cls.temp / "post-appearance-notification.swift"
+        poster_source.write_text(
+            'import Foundation\n'
+            'DistributedNotificationCenter.default().postNotificationName('
+            'Notification.Name("AppleInterfaceThemeChangedNotification"), '
+            'object: nil, userInfo: nil, deliverImmediately: true)\n'
+        )
+        subprocess.run(
+            ["swiftc", str(poster_source), "-o", str(cls.notification_poster)],
+            check=True, capture_output=True, text=True,
+        )
 
     @classmethod
     def tearDownClass(cls):
@@ -159,6 +171,50 @@ class AppearanceWatcherIntegrationTests(unittest.TestCase):
             b"appearance watcher: coordinator failed:",
             self.read_until(process.stderr, b"appearance watcher: coordinator failed:"),
         )
+        self.assertIsNone(process.poll())
+
+    def test_overlapping_production_submissions_finish_in_submission_order(self):
+        log = self.case_dir / "coordinator-order"
+        first_started = self.case_dir / "coordinator-order.started"
+        release_first = self.case_dir / "coordinator-order.release"
+        coordinator = self.write_coordinator(r'''
+if mkdir "$YORHA_TEST_ARG_FILE.first" 2>/dev/null; then
+  printf 'start:first:%s\n' "$1" >> "$YORHA_TEST_ARG_FILE"
+  : > "$YORHA_TEST_ARG_FILE.started"
+  while [ ! -f "$YORHA_TEST_ARG_FILE.release" ]; do sleep 0.01; done
+  printf 'finish:first:%s\n' "$1" >> "$YORHA_TEST_ARG_FILE"
+  printf 'first:%s\n' "$1" > "$YORHA_TEST_ARG_FILE.final"
+else
+  printf 'start:second:%s\n' "$1" >> "$YORHA_TEST_ARG_FILE"
+  printf 'finish:second:%s\n' "$1" >> "$YORHA_TEST_ARG_FILE"
+  printf 'second:%s\n' "$1" > "$YORHA_TEST_ARG_FILE.final"
+fi
+''')
+        process = self.start_watcher(
+            self.binaries["normal"], coordinator,
+            {"YORHA_TEST_ARG_FILE": str(log)},
+        )
+        try:
+            self.wait_for_path(first_started, process)
+            subprocess.run([str(self.notification_poster)], check=True)
+            time.sleep(0.35)
+            before_release = log.read_text().splitlines()
+        finally:
+            release_first.touch()
+        self.assertEqual(len(before_release), 1, before_release)
+        self.assertTrue(before_release[0].startswith("start:first:"))
+
+        final = self.case_dir / "coordinator-order.final"
+        self.wait_for_path(final, process)
+        deadline = time.monotonic() + 2
+        while len(log.read_text().splitlines()) < 4 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        lines = log.read_text().splitlines()
+        self.assertEqual([line.split(":", 2)[:2] for line in lines], [
+            ["start", "first"], ["finish", "first"],
+            ["start", "second"], ["finish", "second"],
+        ])
+        self.assertTrue(final.read_text().startswith("second:"))
         self.assertIsNone(process.poll())
 
     def test_launch_agent_plist_has_the_watcher_contract(self):

@@ -120,6 +120,42 @@ class DeploymentContractTests(unittest.TestCase):
                           "chrome", "regenerate-system-wallpaper", "übersicht", "ubersicht"):
             self.assertNotIn(forbidden, text)
 
+    def test_committed_feature_agent_scope_matches_tracked_plists_and_docs(self):
+        tracked = subprocess.run(
+            ["git", "ls-files", "launchd/com.yorha.*.plist"], cwd=ROOT,
+            check=True, text=True, capture_output=True,
+        ).stdout.splitlines()
+        tracked_names = {Path(path).name for path in tracked}
+        self.assertEqual(tracked_names, {
+            "com.yorha.appearance-watcher.plist",
+            "com.yorha.pod-oracle.plist",
+            "com.yorha.ubersicht-watchdog.plist",
+        })
+
+        deploy_refs = set(re.findall(
+            r'\$REPO/launchd/(com\.yorha\.[A-Za-z0-9.-]+\.plist)',
+            self.deploy_text(),
+        ))
+        self.assertEqual(deploy_refs & tracked_names, tracked_names)
+        self.assertNotIn(
+            "sketchybar-minute",
+            (ROOT / "bin/yorha-backup.sh").read_text(),
+        )
+
+        committed_docs = {
+            path: subprocess.run(
+                ["git", "show", f":{path}"], cwd=ROOT,
+                check=True, text=True, capture_output=True,
+            ).stdout.lower()
+            for path in (
+                "README.md", "docs/DECISIONS.md",
+                "docs/superpowers/plans/2026-08-05-system-appearance-theming.md",
+            )
+        }
+        for path, text in committed_docs.items():
+            self.assertIn("three feature-owned", text, path)
+            self.assertNotRegex(text, r"four (?:user )?launchagents", path)
+
 
 class DeploymentSandboxTests(unittest.TestCase):
     def setUp(self):
@@ -590,6 +626,7 @@ class RestoreContractTests(unittest.TestCase):
         recorded_wallpaper.write_bytes(b"baseline wallpaper")
         wallpaper_state = sandbox / "wallpaper-state"
         launchctl_log = sandbox / "launchctl-log"
+        mutation_log = sandbox / "mutation-log"
         failure_ready = sandbox / "failure-ready"
         env = os.environ.copy()
         env.update({
@@ -598,6 +635,7 @@ class RestoreContractTests(unittest.TestCase):
             "YORHA_TEST_RECORDED_WALLPAPER": str(recorded_wallpaper),
             "YORHA_TEST_WALLPAPER_STATE": str(wallpaper_state),
             "YORHA_TEST_LAUNCHCTL_LOG": str(launchctl_log),
+            "YORHA_TEST_MUTATION_LOG": str(mutation_log),
             "YORHA_TEST_JOB_STATE": str(job_state),
             "YORHA_TEST_FAILURE_READY": str(failure_ready),
         })
@@ -635,6 +673,7 @@ esac
 exit 0
 ''')
         self.write_double(fakebin, "cp", r'''
+printf 'cp\t%s\n' "$*" >> "$YORHA_TEST_MUTATION_LOG"
 case "${YORHA_TEST_RESTORE_FAILURE:-}:$2" in
   cp:*.restore.*)
     printf partial > "$2"
@@ -647,10 +686,19 @@ esac
 exec /bin/cp "$@"
 ''')
         self.write_double(fakebin, "mv", r'''
+printf 'mv\t%s\n' "$*" >> "$YORHA_TEST_MUTATION_LOG"
 case "${YORHA_TEST_RESTORE_FAILURE:-}:$1" in
   mv:*.restore.*) exit 72 ;;
 esac
 exec /bin/mv "$@"
+''')
+        self.write_double(fakebin, "mkdir", r'''
+printf 'mkdir\t%s\n' "$*" >> "$YORHA_TEST_MUTATION_LOG"
+exec /bin/mkdir "$@"
+''')
+        self.write_double(fakebin, "rm", r'''
+printf 'rm\t%s\n' "$*" >> "$YORHA_TEST_MUTATION_LOG"
+exec /bin/rm "$@"
 ''')
         self.write_double(fakebin, "brew", "exit 0\n")
         self.write_double(fakebin, "pkill", "exit 0\n")
@@ -669,6 +717,7 @@ exec /bin/mv "$@"
             "plist": plist, "original_plist": original_plist,
             "job_state": job_state, "recorded_wallpaper": recorded_wallpaper,
             "wallpaper_state": wallpaper_state, "launchctl_log": launchctl_log,
+            "mutation_log": mutation_log,
             "failure_ready": failure_ready, "env": env,
             "snapshot": snapshot, "restore": restore,
         }
@@ -871,6 +920,58 @@ printf '1\n'
                 self.assertTrue(context["job_state"].is_file())
                 self.assertTrue(all(path.exists() for path in context["runtime_paths"]))
                 self.assert_no_plist_temps(context)
+
+    def test_corrupt_preexisting_metadata_fails_before_every_mutation(self):
+        def corruptions(lines):
+            return {
+                "unknown": [*lines, ".config/yorha/not-owned\tABSENT\n"],
+                "duplicate": [*lines, lines[0]],
+                "absolute": [f"/tmp/escape\tABSENT\n", *lines[1:]],
+                "traversal": [f"../escape\tABSENT\n", *lines[1:]],
+                "missing": lines[:-1],
+                "extra-field": [f"{lines[0].rstrip()}\textra\n", *lines[1:]],
+                "missing-field": [f"{lines[0].split(chr(9), 1)[0]}\n", *lines[1:]],
+                "wrong-state": [f"{lines[0].split(chr(9), 1)[0]}\tMAYBE\n", *lines[1:]],
+                "missing-newline": [*lines[:-1], lines[-1].rstrip("\n")],
+                "blank-row": [*lines, "\n"],
+            }
+
+        for name in (
+            "unknown", "duplicate", "absolute", "traversal", "missing",
+            "extra-field", "missing-field", "wrong-state", "missing-newline",
+            "blank-row",
+        ):
+            with self.subTest(corruption=name):
+                context = self.make_restore_sandbox()
+                self.deploy_appearance_fixture(context)
+                metadata = context["snapshot"] / "preexisting.txt"
+                lines = metadata.read_text().splitlines(keepends=True)
+                metadata.write_text("".join(corruptions(lines)[name]))
+                context["launchctl_log"].write_text("")
+                context["mutation_log"].write_text("")
+                context["wallpaper_state"].unlink(missing_ok=True)
+                before = {
+                    str(path.relative_to(context["home"])):
+                        ("dir" if path.is_dir() else path.read_bytes())
+                    for path in context["home"].rglob("*")
+                }
+                for executable in (context["sandbox"] / "bin").iterdir():
+                    self.assertTrue(os.access(executable, os.X_OK), executable)
+
+                result = self.run_restore(context)
+
+                after = {
+                    str(path.relative_to(context["home"])):
+                        ("dir" if path.is_dir() else path.read_bytes())
+                    for path in context["home"].rglob("*")
+                }
+                self.assertEqual(result.returncode, 65, result.stderr)
+                self.assertEqual(after, before)
+                self.assertTrue(context["job_state"].is_file())
+                self.assertEqual(context["launchctl_log"].read_text(), "")
+                self.assertEqual(context["mutation_log"].read_text(), "")
+                self.assertFalse(context["wallpaper_state"].exists())
+                self.assertNotIn("Restore complete.", result.stdout)
 
     def test_docs_state_boundary(self):
         readme = (ROOT / "README.md").read_text().lower()

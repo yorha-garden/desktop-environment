@@ -32,8 +32,8 @@ sketchybar --default label.font="Cascadia Code:Regular:11.0" \
 
 # YoRHa crest, left of the wordmark. The PNG is pre-tinted to INK and rendered
 # 31x36 px (2x); scale 0.5 displays it at ~15.5x18 pt inside the 32 pt bar.
-# deploy.sh copies it here from assets/ — the repo path itself is under the
-# TCC-protected ~/Documents, which launchd services like sketchybar cannot read.
+# deploy.sh installs both variants under ~/.config/yorha/appearance/ — the repo
+# path itself is TCC-protected and unavailable to launchd services like SketchyBar.
 # background.drawing=on is the MASTER gate: the image is a sub-layer of the
 # item background, and with the parent off the image silently never renders —
 # the item still reserves its width, so it looks like a mysterious gap.

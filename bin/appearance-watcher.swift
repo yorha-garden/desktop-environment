@@ -41,18 +41,21 @@ func runCoordinator(path: String, mode: String) {
 final class AppearanceWatcher {
     private let styleProvider: () -> String?
     private let applyMode: (String) -> Void
+    private let coordinatorQueue: DispatchQueue
     private var themeObserver: NSObjectProtocol?
     private var wakeObserver: NSObjectProtocol?
     private var pendingApply: DispatchWorkItem?
 
     init(coordinatorPath: String) {
+        coordinatorQueue = DispatchQueue(
+            label: "com.yorha.appearance-watcher.coordinator",
+            qos: .utility
+        )
         styleProvider = {
             UserDefaults.standard.string(forKey: "AppleInterfaceStyle")
         }
         applyMode = { [coordinatorPath] mode in
-            DispatchQueue.global(qos: .utility).async {
-                runCoordinator(path: coordinatorPath, mode: mode)
-            }
+            runCoordinator(path: coordinatorPath, mode: mode)
         }
         installObservers()
     }
@@ -64,6 +67,9 @@ final class AppearanceWatcher {
         applyMode: @escaping (String) -> Void
     ) {
         _ = coordinatorPath
+        coordinatorQueue = DispatchQueue(
+            label: "com.yorha.appearance-watcher.coordinator.testing"
+        )
         self.styleProvider = styleProvider
         self.applyMode = applyMode
         installObservers()
@@ -120,7 +126,11 @@ final class AppearanceWatcher {
 
     private func applyCurrentAppearance() {
         pendingApply = nil
-        applyMode(resolveAppearance(style: styleProvider()))
+        let mode = resolveAppearance(style: styleProvider())
+        let applyMode = self.applyMode
+        coordinatorQueue.async {
+            applyMode(mode)
+        }
     }
 }
 

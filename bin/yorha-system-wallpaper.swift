@@ -96,11 +96,17 @@ func inspect(path: String) throws -> [String: Any] {
         throw WallpaperError.invalidWallpaper(path)
     }
     let count = CGImageSourceGetCount(source)
+    guard count == 2 else {
+        throw WallpaperError.invalidWallpaper(path)
+    }
     var frames = [[Int]]()
     for index in 0..<count {
         guard let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any],
               let width = properties[kCGImagePropertyPixelWidth] as? NSNumber,
               let height = properties[kCGImagePropertyPixelHeight] as? NSNumber else {
+            throw WallpaperError.invalidWallpaper(path)
+        }
+        guard width.intValue == frameWidth, height.intValue == frameHeight else {
             throw WallpaperError.invalidWallpaper(path)
         }
         frames.append([width.intValue, height.intValue])
@@ -109,7 +115,8 @@ func inspect(path: String) throws -> [String: Any] {
           let tag = CGImageMetadataCopyTagWithPath(metadata, nil, "apple_desktop:apr" as CFString),
           let encoded = CGImageMetadataTagCopyValue(tag) as? String,
           let data = Data(base64Encoded: encoded),
-          let appearance = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Int] else {
+          let appearance = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Int],
+          appearance == ["l": 0, "d": 1] else {
         throw WallpaperError.invalidWallpaper(path)
     }
     return ["frameCount": count, "frames": frames, "appearance": appearance]

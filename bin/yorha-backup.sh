@@ -29,7 +29,6 @@ TARGETS=(
   "$HOME/.config/yorha/cache/watchdog.log"
   "$HOME/.config/yorha/cache/watchdog.strikes"
   "$HOME/.config/yorha/cache/watchdog.stderr.log"
-  "$HOME/.config/yorha/cache/sketchybar-minute.stderr.log"
   "$HOME/.config/sketchybar"
   "$HOME/.config/aerospace"
   "$HOME/.config/borders"
@@ -123,6 +122,69 @@ else
   exit 65
 fi
 
+PREEXISTING_FILE="$HERE/preexisting.txt"
+PREEXISTING_COUNT=0
+PREEXISTING_TAB="$(printf '\t')"
+PREEXISTING_01=""; PREEXISTING_02=""; PREEXISTING_03=""; PREEXISTING_04=""
+PREEXISTING_05=""; PREEXISTING_06=""; PREEXISTING_07=""; PREEXISTING_08=""
+PREEXISTING_09=""; PREEXISTING_10=""; PREEXISTING_11=""; PREEXISTING_12=""
+PREEXISTING_13=""; PREEXISTING_14=""; PREEXISTING_15=""; PREEXISTING_16=""
+PREEXISTING_17=""; PREEXISTING_18=""; PREEXISTING_19=""; PREEXISTING_20=""
+
+invalid_preexisting_metadata() {
+  echo "error: invalid restore metadata in $PREEXISTING_FILE" >&2
+  exit 65
+}
+
+# Parse the complete metadata contract into fixed state slots before staging a
+# plist or touching a service, wallpaper, or destination path. Restore never
+# re-reads the file, so a later replacement cannot smuggle in an unchecked path.
+[ -f "$PREEXISTING_FILE" ] || invalid_preexisting_metadata
+PREEXISTING_LAST_BYTE="$(tail -c 1 "$PREEXISTING_FILE" 2>/dev/null \
+  | od -An -t u1 | tr -d '[:space:]')"
+[ "$PREEXISTING_LAST_BYTE" = 10 ] || invalid_preexisting_metadata
+while IFS= read -r PREEXISTING_ROW || [ -n "$PREEXISTING_ROW" ]; do
+  case "$PREEXISTING_ROW" in
+    *"$PREEXISTING_TAB"*) ;;
+    *) invalid_preexisting_metadata ;;
+  esac
+  PREEXISTING_REL="${PREEXISTING_ROW%%"$PREEXISTING_TAB"*}"
+  PREEXISTING_STATE="${PREEXISTING_ROW#*"$PREEXISTING_TAB"}"
+  case "$PREEXISTING_STATE" in
+    *"$PREEXISTING_TAB"*) invalid_preexisting_metadata ;;
+    PRESENT | ABSENT) ;;
+    *) invalid_preexisting_metadata ;;
+  esac
+  case "$PREEXISTING_REL" in
+    '' | /* | .. | ../* | */.. | */../*) invalid_preexisting_metadata ;;
+  esac
+  case "$PREEXISTING_REL" in
+    .config/ghostty) [ -z "$PREEXISTING_01" ] || invalid_preexisting_metadata; PREEXISTING_01="$PREEXISTING_STATE" ;;
+    .config/yorha/palette.sh) [ -z "$PREEXISTING_02" ] || invalid_preexisting_metadata; PREEXISTING_02="$PREEXISTING_STATE" ;;
+    .config/yorha/shell.zsh) [ -z "$PREEXISTING_03" ] || invalid_preexisting_metadata; PREEXISTING_03="$PREEXISTING_STATE" ;;
+    .config/yorha/starship.toml) [ -z "$PREEXISTING_04" ] || invalid_preexisting_metadata; PREEXISTING_04="$PREEXISTING_STATE" ;;
+    .config/yorha/fastfetch.jsonc) [ -z "$PREEXISTING_05" ] || invalid_preexisting_metadata; PREEXISTING_05="$PREEXISTING_STATE" ;;
+    .config/yorha/logo.txt) [ -z "$PREEXISTING_06" ] || invalid_preexisting_metadata; PREEXISTING_06="$PREEXISTING_STATE" ;;
+    .config/yorha/bin/pod-oracle.py) [ -z "$PREEXISTING_07" ] || invalid_preexisting_metadata; PREEXISTING_07="$PREEXISTING_STATE" ;;
+    .config/yorha/bin/ubersicht-watchdog.sh) [ -z "$PREEXISTING_08" ] || invalid_preexisting_metadata; PREEXISTING_08="$PREEXISTING_STATE" ;;
+    .config/yorha/cache/pod-oracle.json) [ -z "$PREEXISTING_09" ] || invalid_preexisting_metadata; PREEXISTING_09="$PREEXISTING_STATE" ;;
+    .config/yorha/cache/pod-oracle.json.tmp) [ -z "$PREEXISTING_10" ] || invalid_preexisting_metadata; PREEXISTING_10="$PREEXISTING_STATE" ;;
+    .config/yorha/cache/pod-oracle.log) [ -z "$PREEXISTING_11" ] || invalid_preexisting_metadata; PREEXISTING_11="$PREEXISTING_STATE" ;;
+    .config/yorha/cache/pod-oracle.stderr.log) [ -z "$PREEXISTING_12" ] || invalid_preexisting_metadata; PREEXISTING_12="$PREEXISTING_STATE" ;;
+    .config/yorha/cache/watchdog.log) [ -z "$PREEXISTING_13" ] || invalid_preexisting_metadata; PREEXISTING_13="$PREEXISTING_STATE" ;;
+    .config/yorha/cache/watchdog.strikes) [ -z "$PREEXISTING_14" ] || invalid_preexisting_metadata; PREEXISTING_14="$PREEXISTING_STATE" ;;
+    .config/yorha/cache/watchdog.stderr.log) [ -z "$PREEXISTING_15" ] || invalid_preexisting_metadata; PREEXISTING_15="$PREEXISTING_STATE" ;;
+    .config/sketchybar) [ -z "$PREEXISTING_16" ] || invalid_preexisting_metadata; PREEXISTING_16="$PREEXISTING_STATE" ;;
+    .config/aerospace) [ -z "$PREEXISTING_17" ] || invalid_preexisting_metadata; PREEXISTING_17="$PREEXISTING_STATE" ;;
+    .config/borders) [ -z "$PREEXISTING_18" ] || invalid_preexisting_metadata; PREEXISTING_18="$PREEXISTING_STATE" ;;
+    'Library/Application Support/Übersicht/widgets/yorha') [ -z "$PREEXISTING_19" ] || invalid_preexisting_metadata; PREEXISTING_19="$PREEXISTING_STATE" ;;
+    'Library/Sounds/yorha-alert.aiff') [ -z "$PREEXISTING_20" ] || invalid_preexisting_metadata; PREEXISTING_20="$PREEXISTING_STATE" ;;
+    *) invalid_preexisting_metadata ;;
+  esac
+  PREEXISTING_COUNT=$((PREEXISTING_COUNT + 1))
+done < "$PREEXISTING_FILE"
+[ "$PREEXISTING_COUNT" -eq 20 ] || invalid_preexisting_metadata
+
 # Stage the complete original bytes beside the destination before changing any
 # live state. A partial or failed copy is removed by the EXIT/signal cleanup.
 if [ -f "$HERE/appearance-watcher.plist.original" ]; then
@@ -207,8 +269,9 @@ fi
 echo "==> reverting paths, per what actually existed at snapshot time"
 # Data-driven: never guess. ABSENT means the install created it -> delete.
 # PRESENT means it predates us -> restore the captured copy.
-while IFS=$'\t' read -r rel state; do
-  [ -z "${rel:-}" ] && continue
+restore_recorded_path() {
+  rel="$1"
+  state="$2"
   path="$HOME/$rel"
   case "$state" in
     ABSENT)
@@ -224,7 +287,27 @@ while IFS=$'\t' read -r rel state; do
       fi
       ;;
   esac
-done < "$HERE/preexisting.txt"
+}
+restore_recorded_path .config/ghostty "$PREEXISTING_01"
+restore_recorded_path .config/yorha/palette.sh "$PREEXISTING_02"
+restore_recorded_path .config/yorha/shell.zsh "$PREEXISTING_03"
+restore_recorded_path .config/yorha/starship.toml "$PREEXISTING_04"
+restore_recorded_path .config/yorha/fastfetch.jsonc "$PREEXISTING_05"
+restore_recorded_path .config/yorha/logo.txt "$PREEXISTING_06"
+restore_recorded_path .config/yorha/bin/pod-oracle.py "$PREEXISTING_07"
+restore_recorded_path .config/yorha/bin/ubersicht-watchdog.sh "$PREEXISTING_08"
+restore_recorded_path .config/yorha/cache/pod-oracle.json "$PREEXISTING_09"
+restore_recorded_path .config/yorha/cache/pod-oracle.json.tmp "$PREEXISTING_10"
+restore_recorded_path .config/yorha/cache/pod-oracle.log "$PREEXISTING_11"
+restore_recorded_path .config/yorha/cache/pod-oracle.stderr.log "$PREEXISTING_12"
+restore_recorded_path .config/yorha/cache/watchdog.log "$PREEXISTING_13"
+restore_recorded_path .config/yorha/cache/watchdog.strikes "$PREEXISTING_14"
+restore_recorded_path .config/yorha/cache/watchdog.stderr.log "$PREEXISTING_15"
+restore_recorded_path .config/sketchybar "$PREEXISTING_16"
+restore_recorded_path .config/aerospace "$PREEXISTING_17"
+restore_recorded_path .config/borders "$PREEXISTING_18"
+restore_recorded_path 'Library/Application Support/Übersicht/widgets/yorha' "$PREEXISTING_19"
+restore_recorded_path 'Library/Sounds/yorha-alert.aiff' "$PREEXISTING_20"
 
 echo "==> restoring wallpaper"
 WP="$(cat "$HERE/wallpaper.txt")"

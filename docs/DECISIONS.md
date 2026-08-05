@@ -89,6 +89,11 @@ The executables live under `~/.config/yorha/bin` and output is directed to
 TCC-protected repository under `~/Documents`, even when launchd successfully loads
 the plist.
 
+The committed feature owns exactly three feature-owned LaunchAgents: the Pod
+oracle, Übersicht watchdog, and appearance watcher. A SketchyBar minute-boundary
+agent may exist as separate user-owned work, but it is outside this feature's
+tracked deploy, backup, and restore contracts.
+
 `apply-appearance.sh` owns only live SketchyBar fields: clock/date text, YoRHa
 wordmark, and crest path. It serializes calls with `appearance/apply.lock` and
 writes `appearance/last-successful-mode` atomically only after SketchyBar succeeds.

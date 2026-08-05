@@ -15,7 +15,7 @@ places macOS reads from (`~/.config/…`, `~/Library/Application Support/…`); 
 repo holds the authoritative copies plus the Gemini integration and the docs.
 
 ```
-bin/deploy.sh    repo  ->  live locations   (also loads four user LaunchAgents)
+bin/deploy.sh    repo  ->  live locations   (also loads three feature-owned LaunchAgents)
 bin/capture.sh   live  ->  repo             (run after editing something in place)
 ```
 
@@ -47,7 +47,7 @@ to see exactly what changed on the machine.
 | `assets/wallpaper.svg` / `wallpaper-dark.svg` | Developer SVG sources for the matching light and dark wallpaper frames. |
 | `assets/yorha-system.heic` | Committed two-frame 5120×2880 dynamic wallpaper; deployment copies and assigns it once, then macOS owns frame selection. |
 | `assets/yorha-icon-light.png` / `yorha-icon-dark.png` | Fixed-name SketchyBar crests copied into the appearance runtime tree. |
-| `launchd/` | Four user agents; see Automatic appearance below for lifecycle and responsibilities. |
+| `launchd/` | Three feature-owned agents: the oracle timer, Übersicht watchdog, and appearance watcher. |
 | `docs/` | Architecture, palette, and the decision log. |
 
 ---
@@ -74,9 +74,11 @@ coordinator updates only SketchyBar text colors, wordmark color, and crest. A
 same-mode run is a no-op unless passed `--force`; failures do not advance the
 successful-mode marker, so startup, wake, or the next notification retries.
 
-Deployment manages four user LaunchAgents: the Pod oracle timer, Übersicht
-watchdog, SketchyBar minute-boundary event, and appearance watcher. Appearance
-runtime files are deliberately outside the TCC-protected repository:
+Deployment manages three feature-owned LaunchAgents: the Pod oracle timer,
+Übersicht watchdog, and appearance watcher. A separate user-owned SketchyBar
+minute-boundary agent, when present, is outside this feature's tracked deploy,
+backup, and restore contracts. Appearance runtime files are deliberately outside
+the TCC-protected repository:
 
 ```text
 ~/.config/yorha/bin/yorha-appearance-watcher

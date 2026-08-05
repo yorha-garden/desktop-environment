@@ -6,6 +6,8 @@
 
 **Architecture:** One committed two-frame dynamic HEIC is assigned once at deployment and macOS selects its Light/Dark frame natively. Übersicht follows `prefers-color-scheme` independently, while a compiled Swift LaunchAgent resolves appearance at login, wake, and `AppleInterfaceThemeChangedNotification` and invokes an idempotent SketchyBar-only coordinator.
 
+**Agent scope:** The committed checkout has exactly three feature-owned LaunchAgents: Pod oracle, Übersicht watchdog, and appearance watcher. The user-owned, untracked SketchyBar minute-boundary agent is separate work and is not part of this feature's deploy, backup, restore, or documentation count.
+
 **Tech Stack:** macOS 26, Swift 6.2/AppKit/Image I/O, HEIC `apple_desktop:apr` metadata, launchd, Bash 3.2, AppleScript, Übersicht JSX/CSS, SketchyBar CLI, Python 3 standard-library tests; Chrome headless is developer-only regeneration tooling.
 
 ## Global Constraints
@@ -639,7 +641,7 @@ Use `$TEXT` for defaults/date/clock, `$BRAND` for the wordmark, `$CREST` for the
 
 - [ ] **Step 4: Install committed runtime artifacts atomically**
 
-Merge into the current `deploy.sh`, preserving the minute-agent block:
+Merge into the current `deploy.sh` without absorbing the separate user-owned minute-agent block:
 
 1. Create `~/.config/yorha/bin`, `~/.config/yorha/appearance`, and `~/.config/yorha/logs`.
 2. Run `bin/make-wallpaper.sh --verify` to inspect the already committed HEIC. Do not invoke its no-argument apply mode, its developer regenerator, or Chrome.
@@ -920,7 +922,7 @@ Do not infer prior state from the post-deployment plist or from `launchagents.tx
 
 - [ ] **Step 4: Update documentation**
 
-README: automatic desktop appearance/permanent-dark Ghostty summary, new file-map entries, macOS-native dynamic HEIC ownership, system→watcher→SketchyBar-coordinator flow, runtime/log paths, four LaunchAgents, TCC/runtime-path gotchas, and the developer-only `--with-chrome` regeneration command. DECISIONS: single assigned HEIC rationale and exact metadata/frame contract, dedicated watcher rationale, exact palettes, media-query/no-reload choice, SketchyBar retry behavior, and Ghostty boundary. Preserve current README minute-event changes.
+README: automatic desktop appearance/permanent-dark Ghostty summary, new file-map entries, macOS-native dynamic HEIC ownership, system→watcher→SketchyBar-coordinator flow, runtime/log paths, three feature-owned LaunchAgents, TCC/runtime-path gotchas, and the developer-only `--with-chrome` regeneration command. Treat the user's minute-event prose as separate work. DECISIONS: single assigned HEIC rationale and exact metadata/frame contract, dedicated watcher rationale, exact palettes, media-query/no-reload choice, SketchyBar retry behavior, exact three-agent feature scope, and Ghostty boundary.
 
 - [ ] **Step 5: Run full static verification**
 

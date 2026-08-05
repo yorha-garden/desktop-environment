@@ -1,4 +1,4 @@
-import hashlib, json, re, struct, subprocess, unittest, xml.etree.ElementTree as ET
+import hashlib, json, re, shutil, struct, subprocess, tempfile, unittest, xml.etree.ElementTree as ET
 from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -54,3 +54,67 @@ class ThemeAssetTests(unittest.TestCase):
         before = hashlib.sha256(wallpaper.read_bytes()).digest()
         subprocess.run([str(ROOT / "bin/make-wallpaper.sh"), "--verify"], check=True)
         self.assertEqual(hashlib.sha256(wallpaper.read_bytes()).digest(), before)
+
+
+class WallpaperContractNegativeTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.temporary = tempfile.TemporaryDirectory()
+        cls.fixture_builder = Path(cls.temporary.name) / "heic-fixture-builder"
+        subprocess.run(
+            ["swiftc", str(ROOT / "tests/heic_fixture_builder.swift"),
+             "-o", str(cls.fixture_builder)],
+            check=True, text=True, capture_output=True,
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.temporary.cleanup()
+
+    def make_fixture(self, contract):
+        path = Path(self.temporary.name) / f"{contract}.heic"
+        subprocess.run([str(self.fixture_builder), contract, str(path)], check=True)
+        return path
+
+    def inspect(self, path):
+        return subprocess.run(
+            ["swift", str(ROOT / "bin/yorha-system-wallpaper.swift"),
+             "--inspect", str(path)],
+            text=True, capture_output=True,
+        )
+
+    def test_inspector_rejects_every_readable_invalid_contract(self):
+        for contract in (
+            "one-frame", "wrong-dimensions", "missing-metadata",
+            "missing-key", "extra-key", "wrong-values",
+        ):
+            with self.subTest(contract=contract):
+                fixture = self.make_fixture(contract)
+                self.assertGreater(fixture.stat().st_size, 0)
+                self.assertNotEqual(self.inspect(fixture).returncode, 0)
+
+    def test_make_wallpaper_and_deploy_verification_reject_invalid_heic(self):
+        fixture = self.make_fixture("extra-key")
+        shadow = Path(self.temporary.name) / "shadow-repo"
+        (shadow / "assets").mkdir(parents=True)
+        (shadow / "bin").mkdir()
+        shutil.copy2(fixture, shadow / "assets/yorha-system.heic")
+        for name in ("make-wallpaper.sh", "yorha-system-wallpaper.swift"):
+            shutil.copy2(ROOT / "bin" / name, shadow / "bin" / name)
+
+        consumer = subprocess.run(
+            [str(shadow / "bin/make-wallpaper.sh"), "--verify"],
+            text=True, capture_output=True,
+        )
+        self.assertNotEqual(consumer.returncode, 0)
+
+        deploy = (ROOT / "bin/deploy.sh").read_text()
+        verification = re.findall(
+            r'^"\$REPO/bin/make-wallpaper\.sh" --verify$', deploy, re.M
+        )
+        self.assertEqual(verification, ['"$REPO/bin/make-wallpaper.sh" --verify'])
+        deploy_gate = subprocess.run(
+            ["/bin/bash", "-c", f'REPO="$1"\n{verification[0]}', "gate", str(shadow)],
+            text=True, capture_output=True,
+        )
+        self.assertNotEqual(deploy_gate.returncode, 0)

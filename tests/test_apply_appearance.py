@@ -83,6 +83,26 @@ class ApplyAppearanceTests(unittest.TestCase):
             "--set", "yorha_icon", f"background.image={crest}",
         ]
 
+    def process_start_identity(self, pid):
+        return subprocess.run(
+            ["ps", "-p", str(pid), "-o", "lstart="],
+            check=True, text=True, capture_output=True,
+        ).stdout.strip()
+
+    def write_lock_owner(self, pid, start_identity, token="foreign-owner"):
+        self.lock.mkdir(exist_ok=True)
+        (self.lock / "owner").write_text(
+            f"pid\t{pid}\nstart\t{start_identity}\ntoken\t{token}\n"
+        )
+
+    def fast_sleep_env(self):
+        fake_bin = Path(self.tempdir.name) / "fast-sleep-bin"
+        fake_bin.mkdir(exist_ok=True)
+        sleep = fake_bin / "sleep"
+        sleep.write_text("#!/usr/bin/env bash\nexit 0\n")
+        sleep.chmod(0o755)
+        return {"PATH": f"{fake_bin}:{os.environ['PATH']}"}
+
     def test_argument_count_validation_precedes_missing_asset_checks(self):
         self.light_crest.unlink()
         self.dark_crest.unlink()
@@ -167,6 +187,64 @@ class ApplyAppearanceTests(unittest.TestCase):
         self.assertEqual(self.call_argvs(), [])
         self.assertTrue(self.lock.is_dir())
         self.assertEqual(len(sleep_log.read_text().splitlines()), 99)
+
+    def test_active_lock_owner_is_never_reclaimed(self):
+        self.write_lock_owner(os.getpid(), self.process_start_identity(os.getpid()))
+        result = self.run_apply("dark", extra_env=self.fast_sleep_env())
+        self.assertEqual(result.returncode, 75)
+        self.assertTrue((self.lock / "owner").is_file())
+        self.assertEqual(self.call_argvs(), [])
+
+    def test_dead_and_reused_pid_lock_owners_are_reclaimed(self):
+        cases = (
+            (999999, "dead process"),
+            (os.getpid(), "identity from a prior use of this pid"),
+        )
+        for pid, start_identity in cases:
+            with self.subTest(pid=pid, start_identity=start_identity):
+                if self.lock.exists():
+                    (self.lock / "owner").unlink(missing_ok=True)
+                    self.lock.rmdir()
+                self.write_lock_owner(pid, start_identity)
+                result = self.run_apply("dark", extra_env=self.fast_sleep_env())
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertFalse(self.lock.exists())
+                self.state.unlink(missing_ok=True)
+
+    def test_malformed_and_ownerless_stale_locks_are_reclaimed(self):
+        for owner in (None, "not owner metadata\n"):
+            with self.subTest(owner=owner):
+                if self.lock.exists():
+                    (self.lock / "owner").unlink(missing_ok=True)
+                    self.lock.rmdir()
+                self.lock.mkdir()
+                if owner is not None:
+                    (self.lock / "owner").write_text(owner)
+                os.utime(self.lock, (1, 1))
+                result = self.run_apply("light", extra_env=self.fast_sleep_env())
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertFalse(self.lock.exists())
+                self.state.unlink(missing_ok=True)
+
+    def test_cleanup_never_deletes_a_lock_reowned_by_another_process(self):
+        other_pid = os.getpid()
+        other_start = self.process_start_identity(other_pid)
+        self.sketchybar.write_text(
+            "#!/usr/bin/env bash\n"
+            "printf 'pid\\t%s\\nstart\\t%s\\ntoken\\tforeign-owner\\n' "
+            '"$YORHA_TEST_OTHER_PID" "$YORHA_TEST_OTHER_START" '
+            '> "$YORHA_TEST_LOCK_PATH/owner"\n'
+            "exit 9\n"
+        )
+        self.sketchybar.chmod(0o755)
+        result = self.run_apply("dark", extra_env={
+            "YORHA_TEST_OTHER_PID": str(other_pid),
+            "YORHA_TEST_OTHER_START": other_start,
+            "YORHA_TEST_LOCK_PATH": str(self.lock),
+        })
+        self.assertEqual(result.returncode, 9)
+        self.assertTrue(self.lock.is_dir())
+        self.assertIn("token\tforeign-owner", (self.lock / "owner").read_text())
 
     def write_signaling_mkdir(self, exit_code):
         fake_bin = Path(self.tempdir.name) / f"fake-mkdir-{exit_code}"
