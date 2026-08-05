@@ -13,3 +13,6 @@ cache/
 assets/wallpaper*.png
 
 .DS_Store
+
+# Local visual-design companion state
+.superpowers/
