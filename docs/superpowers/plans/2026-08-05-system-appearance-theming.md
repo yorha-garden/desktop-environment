@@ -21,6 +21,7 @@
 - The watcher and coordinator own SketchyBar only; they never assign wallpaper, restart `WallpaperAgent`, choose raster paths, read an asset manifest, or refresh Übersicht.
 - Deployment and restoration remain idempotent.
 - Existing uncommitted changes in `README.md`, `bin/deploy.sh`, `config/sketchybar/sketchybarrc`, `widgets/yorha/hud.jsx`, `widgets/yorha/pod.jsx`, and `launchd/com.yorha.sketchybar-minute.plist` are user-owned. Merge around them; never replace or discard them.
+- Use `f9fd880` (`docs: plan automatic desktop appearance theming`) as the recorded feature-base commit for final range checks; do not assume a fixed number of feature commits.
 - Add no package dependency.
 
 ## File Map
@@ -295,11 +296,23 @@ Expected: stage only theming hunks from HUD/Pod. Their pre-existing telemetry/re
 
 - [ ] **Step 1: Write failing coordinator tests**
 
-Create a `unittest.TestCase` whose setup builds a `TemporaryDirectory` as the appearance root, two empty crest files at the fixed runtime names, and an executable SketchyBar double that appends argv to a call log. Implement these exact tests:
+Create a `unittest.TestCase` whose setup builds a `TemporaryDirectory` as the appearance root, two empty crest files at the fixed runtime names, and an executable SketchyBar double that appends argv to a call log. The helper rewrites the same double so a failed update can be repaired and retried:
 
 ```python
+def write_sketchybar(self, exit_code=0):
+    self.sketchybar.write_text(
+        "#!/usr/bin/env bash\n"
+        'printf \'sketchybar\t%s\\n\' "$*" >> "$YORHA_TEST_CALL_LOG"\n'
+        f"exit {exit_code}\n")
+    self.sketchybar.chmod(0o755)
+
 def test_invalid_mode_changes_nothing(self):
     result = self.run_apply("sepia")
+    self.assertEqual(result.returncode, 64)
+    self.assertEqual(self.calls(), [])
+
+def test_extra_arguments_are_rejected(self):
+    result = self.run_apply("light", "--force", "unexpected")
     self.assertEqual(result.returncode, 64)
     self.assertEqual(self.calls(), [])
 
@@ -320,12 +333,20 @@ def test_same_mode_is_noop_unless_forced(self):
     self.assertEqual(self.run_apply("light", "--force").returncode, 0)
     self.assertGreater(len(self.calls()), len(first))
 
-def test_bar_failure_does_not_advance_and_is_retryable(self):
-    self.make_failing(self.sketchybar)
-    result = self.run_apply("dark")
-    self.assertNotEqual(result.returncode, 0)
-    self.assertIn("sketchybar", "\n".join(self.calls()))
-    self.assertFalse(self.state.exists())
+def test_bar_failure_preserves_prior_mode_and_dark_retry_succeeds(self):
+    self.assertEqual(self.run_apply("light").returncode, 0)
+    self.assertEqual(self.state.read_text().strip(), "light")
+
+    self.write_sketchybar(exit_code=1)
+    failed = self.run_apply("dark")
+    self.assertNotEqual(failed.returncode, 0)
+    self.assertEqual(self.state.read_text().strip(), "light")
+
+    self.write_sketchybar(exit_code=0)
+    retried = self.run_apply("dark")
+    self.assertEqual(retried.returncode, 0, retried.stderr)
+    self.assertEqual(self.state.read_text().strip(), "dark")
+    self.assertIn(str(self.dark_crest), "\n".join(self.calls()))
 
 def test_missing_crest_changes_nothing(self):
     self.dark_crest.unlink()
@@ -350,9 +371,11 @@ Start with:
 ```bash
 #!/usr/bin/env bash
 set -uo pipefail
-MODE="${1:-}"; FORCE="${2:-}"
+usage() { echo "usage: $0 light|dark [--force]" >&2; }
+[ "$#" -eq 1 ] || [ "$#" -eq 2 ] || { usage; exit 64; }
+MODE="$1"; FORCE="${2:-}"
 case "$MODE" in light|dark) ;; *) echo "usage: $0 light|dark [--force]" >&2; exit 64;; esac
-[ -z "$FORCE" ] || [ "$FORCE" = --force ] || exit 64
+[ -z "$FORCE" ] || [ "$FORCE" = --force ] || { usage; exit 64; }
 ROOT="${YORHA_APPEARANCE_ROOT:-$HOME/.config/yorha/appearance}"
 STATE="$ROOT/last-successful-mode"; LOCK="$ROOT/apply.lock"
 LIGHT_CREST="$ROOT/yorha-icon-light.png"
@@ -368,10 +391,19 @@ until mkdir "$LOCK" 2>/dev/null; do
   [ "$attempt" -lt 100 ] || { echo "appearance lock timeout" >&2; exit 75; }
   sleep 0.1
 done
-trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT INT TERM
+cleanup() { rmdir "$LOCK" 2>/dev/null || true; }
+on_signal() {
+  status="$1"
+  trap - EXIT INT TERM
+  cleanup
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'on_signal 130' INT
+trap 'on_signal 143' TERM
 ```
 
-A repeated completed mode is a no-op unless forced. Do not source any manifest or accept wallpaper paths from the environment.
+The exact argument-count gate must execute before mode/asset validation, so missing or surplus arguments always return 64 without changing state or invoking SketchyBar. A repeated completed mode is a no-op unless forced. Do not source any manifest or accept wallpaper paths from the environment. `INT` and `TERM` must clean the lock and terminate with conventional status 130 or 143; they must not resume the update after cleanup.
 
 - [ ] **Step 4: Implement the SketchyBar-only update**
 
@@ -502,23 +534,64 @@ git commit -m "feat: watch macOS appearance changes natively"
 Create `tests/test_deployment_contract.py`:
 
 ```python
-import plistlib, unittest
+import plistlib, re, unittest
 from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 class DeploymentContractTests(unittest.TestCase):
-    def test_deploy_installs_contract(self):
-        text = (ROOT / "bin/deploy.sh").read_text()
-        for value in ("appearance-watcher.swift", "swiftc", "apply-appearance.sh",
-                      "yorha-system.heic", "yorha-icon-light.png", "yorha-icon-dark.png",
-                      "com.yorha.appearance-watcher.plist"):
-            self.assertIn(value, text)
+    def deploy_text(self):
+        return (ROOT / "bin/deploy.sh").read_text()
 
-    def test_deploy_never_renders_wallpaper(self):
-        text = (ROOT / "bin/deploy.sh").read_text().lower()
+    def appearance_block(self):
+        text = self.deploy_text()
+        begin = "# --- appearance runtime BEGIN"
+        end = "# --- appearance runtime END"
+        self.assertEqual((text.count(begin), text.count(end)), (1, 1))
+        return text.split(begin, 1)[1].split(end, 1)[0]
+
+    def test_deploy_uses_verify_only_and_never_regenerates(self):
+        text = self.deploy_text()
+        self.appearance_block()
+        self.assertEqual(text.count('"$REPO/bin/make-wallpaper.sh" --verify'), 1)
+        self.assertEqual(len(re.findall(r"make-wallpaper\.sh", text)), 1)
+        lowered = text.lower()
         for forbidden in ("--with-chrome", "google chrome", "regenerate-system-wallpaper",
                           "--headless", "wallpaper-light-", "wallpaper-dark-", "assets.env"):
-            self.assertNotIn(forbidden, text)
+            self.assertNotIn(forbidden, lowered)
+
+    def test_runtime_assets_are_atomic_and_committed_heic_is_source(self):
+        block = self.appearance_block()
+        helper = re.search(r"install_atomic\(\) \{(?P<body>.*?)\n\}", block, re.S)
+        self.assertIsNotNone(helper)
+        body = helper.group("body")
+        self.assertIn('temporary="${destination}.tmp.$$"', body)
+        self.assertLess(body.index('cp "$source" "$temporary"'),
+                        body.index('mv "$temporary" "$destination"'))
+        for call in (
+            'install_atomic "$REPO/assets/yorha-system.heic" "$RUNTIME_WALLPAPER"',
+            'install_atomic "$REPO/assets/yorha-icon-light.png" "$APPEARANCE/yorha-icon-light.png"',
+            'install_atomic "$REPO/assets/yorha-icon-dark.png" "$APPEARANCE/yorha-icon-dark.png"',
+            'install_atomic "$REPO/bin/apply-appearance.sh" "$RUNTIME_COORDINATOR"',
+        ):
+            self.assertEqual(block.count(call), 1, call)
+
+    def test_runtime_heic_is_assigned_exactly_once_with_argv(self):
+        text = self.deploy_text()
+        block = self.appearance_block()
+        self.assertEqual(re.findall(r'osascript\s+-\s+"([^"]+)"', text),
+                         ["$RUNTIME_WALLPAPER"])
+        self.assertEqual(text.count('set picture of every desktop'), 1)
+        self.assertEqual(text.count('on run argv'), 1)
+        self.assertIn('POSIX file (item 1 of argv)', block)
+        self.assertNotRegex(text, r'osascript[^\n]*\$REPO')
+
+    def test_watcher_plist_and_coordinator_install_contract(self):
+        block = self.appearance_block()
+        self.assertRegex(block, r'swiftc -O .*appearance-watcher\.swift" -o "\$WATCHER_TMP"')
+        self.assertLess(block.index('swiftc -O '),
+                        block.index('mv "$WATCHER_TMP" "$RUNTIME_WATCHER"'))
+        self.assertEqual(block.count('launchctl bootstrap "gui/$(id -u)" "$APPEARANCE_PLIST"'), 1)
+        self.assertEqual(block.count('"$RUNTIME_COORDINATOR" "$MODE" --force'), 1)
 
     def test_bar_resolves_mode_before_defaults(self):
         text = (ROOT / "config/sketchybar/sketchybarrc").read_text()
@@ -575,7 +648,34 @@ Merge into the current `deploy.sh`, preserving the minute-agent block:
 5. Assign the copied HEIC path to every desktop once with argv-bound AppleScript:
 
 ```bash
+# --- appearance runtime BEGIN
+APPEARANCE="$HOME/.config/yorha/appearance"
+YORHA_BIN="$HOME/.config/yorha/bin"
+mkdir -p "$APPEARANCE" "$YORHA_BIN" "$HOME/.config/yorha/logs"
+
+install_atomic() {
+  source="$1"
+  destination="$2"
+  temporary="${destination}.tmp.$$"
+  cp "$source" "$temporary"
+  mv "$temporary" "$destination"
+}
+
+"$REPO/bin/make-wallpaper.sh" --verify
 RUNTIME_WALLPAPER="$APPEARANCE/yorha-system.heic"
+RUNTIME_COORDINATOR="$YORHA_BIN/apply-appearance.sh"
+RUNTIME_WATCHER="$YORHA_BIN/yorha-appearance-watcher"
+install_atomic "$REPO/assets/yorha-system.heic" "$RUNTIME_WALLPAPER"
+install_atomic "$REPO/assets/yorha-icon-light.png" "$APPEARANCE/yorha-icon-light.png"
+install_atomic "$REPO/assets/yorha-icon-dark.png" "$APPEARANCE/yorha-icon-dark.png"
+install_atomic "$REPO/bin/apply-appearance.sh" "$RUNTIME_COORDINATOR"
+chmod +x "$RUNTIME_COORDINATOR"
+
+WATCHER_TMP="$RUNTIME_WATCHER.tmp.$$"
+swiftc -O "$REPO/bin/appearance-watcher.swift" -o "$WATCHER_TMP"
+chmod +x "$WATCHER_TMP"
+mv "$WATCHER_TMP" "$RUNTIME_WATCHER"
+
 osascript - "$RUNTIME_WALLPAPER" <<'AS'
 on run argv
   tell application "System Events" to set picture of every desktop to POSIX file (item 1 of argv)
@@ -583,17 +683,30 @@ end run
 AS
 ```
 
-Do not create an asset manifest, hashed wallpaper directory, or generated raster. Do not restart `WallpaperAgent`: the single assigned HEIC path and its `apple_desktop:apr` metadata are the wallpaper contract.
+Keep the `appearance runtime BEGIN` marker open through Step 5 and close it only after the coordinator call. Do not create an asset manifest, hashed wallpaper directory, or generated raster. Do not restart `WallpaperAgent`: the single assigned HEIC path and its `apple_desktop:apr` metadata are the wallpaper contract. The test requires exactly one `make-wallpaper.sh` reference (`--verify`) and exactly one `osascript - "$RUNTIME_WALLPAPER"` assignment, so do not add a repository-path fallback.
 
 - [ ] **Step 5: Install/bootstrap LaunchAgent and apply current mode**
 
 Render `HOME_PATH`, boot out the prior label, bootstrap the plist, then force the current effective mode for SketchyBar only. Do not skip installation merely because SketchyBar is absent. The forced coordinator call must leave the wallpaper path untouched.
 
 ```bash
-sed "s|HOME_PATH|$HOME|g" "$REPO/launchd/com.yorha.appearance-watcher.plist" > "$APPEARANCE_PLIST"
+APPEARANCE_PLIST="$HOME/Library/LaunchAgents/com.yorha.appearance-watcher.plist"
+PLIST_TMP="$APPEARANCE_PLIST.tmp.$$"
+sed "s|HOME_PATH|$HOME|g" "$REPO/launchd/com.yorha.appearance-watcher.plist" > "$PLIST_TMP"
+mv "$PLIST_TMP" "$APPEARANCE_PLIST"
 launchctl bootout "gui/$(id -u)/com.yorha.appearance-watcher" >/dev/null 2>&1 || true
 launchctl bootstrap "gui/$(id -u)" "$APPEARANCE_PLIST"
+if [ "$(defaults read -g AppleInterfaceStyle 2>/dev/null || true)" = Dark ]; then
+  MODE=dark
+else
+  MODE=light
+fi
+"$RUNTIME_COORDINATOR" "$MODE" --force \
+  || say "appearance -> watcher installed; SketchyBar update will retry"
+# --- appearance runtime END
 ```
+
+The block markers are part of the test interface. Keep the HEIC assignment before LaunchAgent bootstrap and keep the forced coordinator call after bootstrap. The coordinator call may fail when SketchyBar is absent, but it must not roll back the installed watcher or cause a second wallpaper assignment.
 
 - [ ] **Step 6: Verify and commit**
 
@@ -628,14 +741,97 @@ Expected: stage only appearance-related hunks. The user's minute-boundary hunks 
 
 - [ ] **Step 1: Add failing restore/docs tests**
 
-Append:
+Extend the imports in `tests/test_deployment_contract.py` with `os`, `subprocess`, and `tempfile`, then append this sandboxed test. It runs the backup generator and generated restore script under a temporary `HOME`; every external command that could touch the real session is replaced by a command double:
 
 ```python
-def test_restore_removes_appearance_runtime(self):
-    text = (ROOT / "bin/yorha-backup.sh").read_text()
-    for value in ("com.yorha.appearance-watcher", "yorha-appearance-watcher",
-                  "apply-appearance.sh", ".config/yorha/appearance"):
-        self.assertIn(value, text)
+def write_double(self, directory, name, body):
+    path = directory / name
+    path.write_text("#!/bin/sh\n" + body)
+    path.chmod(0o755)
+    return path
+
+def test_generated_restore_cleans_appearance_runtime_in_sandbox(self):
+    with tempfile.TemporaryDirectory() as raw:
+        sandbox = Path(raw)
+        home = sandbox / "home"
+        fakebin = sandbox / "bin"
+        home.mkdir(); fakebin.mkdir()
+        (home / ".zshrc").write_text("baseline\n")
+
+        # Make ~/.config/yorha and the watcher plist pre-existing. Restore must
+        # preserve both while removing only the appearance feature's additions.
+        yorha = home / ".config/yorha"
+        yorha.mkdir(parents=True)
+        (yorha / "keep.txt").write_text("pre-existing\n")
+        agents = home / "Library/LaunchAgents"
+        agents.mkdir(parents=True)
+        plist = agents / "com.yorha.appearance-watcher.plist"
+        plist.write_text("pre-existing plist\n")
+
+        recorded_wallpaper = sandbox / "recorded.heic"
+        recorded_wallpaper.write_bytes(b"baseline wallpaper")
+        wallpaper_state = sandbox / "wallpaper-state"
+        launchctl_log = sandbox / "launchctl-log"
+        env = os.environ.copy()
+        env.update({
+            "HOME": str(home),
+            "PATH": f"{fakebin}:/usr/bin:/bin",
+            "YORHA_TEST_RECORDED_WALLPAPER": str(recorded_wallpaper),
+            "YORHA_TEST_WALLPAPER_STATE": str(wallpaper_state),
+            "YORHA_TEST_LAUNCHCTL_LOG": str(launchctl_log),
+        })
+
+        self.write_double(fakebin, "osascript", r'''
+if [ "$1" = "-e" ]; then
+  case "$2" in
+    *"get picture of current desktop"*)
+      printf '%s\n' "$YORHA_TEST_RECORDED_WALLPAPER" ;;
+  esac
+elif [ "$1" = "-" ]; then
+  printf '%s\n' "$2" > "$YORHA_TEST_WALLPAPER_STATE"
+fi
+exit 0
+''')
+        self.write_double(fakebin, "launchctl",
+                          'printf \'%s\\n\' "$*" >> "$YORHA_TEST_LAUNCHCTL_LOG"\n')
+        self.write_double(fakebin, "brew", "exit 0\n")
+        self.write_double(fakebin, "pkill", "exit 0\n")
+        self.write_double(fakebin, "sw_vers", "printf '26.0\\n'\n")
+        self.write_double(fakebin, "csrutil", "printf 'System Integrity Protection status: enabled.\\n'\n")
+
+        generated = subprocess.run(
+            [str(ROOT / "bin/yorha-backup.sh")], env=env,
+            text=True, capture_output=True, check=True)
+        snapshot = Path(generated.stdout.strip().splitlines()[-1])
+        restore = snapshot / "restore.sh"
+        self.assertTrue(restore.is_file())
+
+        appearance = yorha / "appearance"
+        runtime_paths = [
+            appearance / "yorha-system.heic",
+            appearance / "yorha-icon-light.png",
+            appearance / "yorha-icon-dark.png",
+            appearance / "last-successful-mode",
+            yorha / "bin/yorha-appearance-watcher",
+            yorha / "bin/apply-appearance.sh",
+            yorha / "logs/appearance.log",
+        ]
+        for path in runtime_paths:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("installed\n")
+        (appearance / "apply.lock").mkdir()
+
+        subprocess.run([str(restore)], env=env, check=True,
+                       text=True, capture_output=True)
+
+        for path in runtime_paths:
+            self.assertFalse(path.exists(), path)
+        self.assertFalse((appearance / "apply.lock").exists())
+        self.assertTrue((yorha / "keep.txt").is_file())
+        self.assertEqual(plist.read_text(), "pre-existing plist\n")
+        self.assertIn("bootout", launchctl_log.read_text())
+        self.assertIn("com.yorha.appearance-watcher", launchctl_log.read_text())
+        self.assertEqual(wallpaper_state.read_text().strip(), str(recorded_wallpaper))
 
 def test_docs_state_boundary(self):
     readme = (ROOT / "README.md").read_text().lower()
@@ -645,6 +841,8 @@ def test_docs_state_boundary(self):
     self.assertIn("appearance-watcher", decisions)
     self.assertIn("prefers-color-scheme", decisions)
 ```
+
+This test must never execute the generated restore with the real `HOME`, `launchctl`, `osascript`, `brew`, or `pkill`. The pre-existing `~/.config/yorha/keep.txt` and watcher plist assertions prevent an implementation from passing by recursively deleting the broad parent or unconditionally deleting the plist.
 
 - [ ] **Step 2: Confirm failure**
 
@@ -696,8 +894,6 @@ shasum -a 256 config/ghostty/config config/ghostty/config.ghostty \
   > "$VERIFY_DIR/ghostty.before"
 if [ "$(defaults read -g AppleInterfaceStyle 2>/dev/null || true)" = Dark ]; then echo dark; else echo light; fi \
   > "$VERIFY_DIR/effective-mode"
-osascript -e 'tell application "System Events" to get picture of every desktop' \
-  > "$VERIFY_DIR/wallpaper.before"
 ```
 
 - [ ] **Step 7: Deploy, verify one HEIC assignment, and exercise SketchyBar modes**
@@ -706,22 +902,91 @@ osascript -e 'tell application "System Events" to get picture of every desktop' 
 bash bin/deploy.sh
 VERIFY_DIR="$(cat /tmp/yorha-appearance-verify-dir)"
 APPLY="$HOME/.config/yorha/bin/apply-appearance.sh"
-swift bin/yorha-system-wallpaper.swift --inspect "$HOME/.config/yorha/appearance/yorha-system.heic"
-osascript -e 'tell application "System Events" to get picture of every desktop' \
-  > "$VERIFY_DIR/wallpaper.deployed"
-grep -F "$HOME/.config/yorha/appearance/yorha-system.heic" "$VERIFY_DIR/wallpaper.deployed"
-"$APPLY" light --force; test "$(cat "$HOME/.config/yorha/appearance/last-successful-mode")" = light
-osascript -e 'tell application "System Events" to get picture of every desktop' \
-  > "$VERIFY_DIR/wallpaper.after-light"
-diff -u "$VERIFY_DIR/wallpaper.deployed" "$VERIFY_DIR/wallpaper.after-light"
-"$APPLY" dark --force; test "$(cat "$HOME/.config/yorha/appearance/last-successful-mode")" = dark
-osascript -e 'tell application "System Events" to get picture of every desktop' \
-  > "$VERIFY_DIR/wallpaper.after-dark"
-diff -u "$VERIFY_DIR/wallpaper.deployed" "$VERIFY_DIR/wallpaper.after-dark"
-"$APPLY" "$(cat "$VERIFY_DIR/effective-mode")" --force
+RUNTIME_HEIC="$HOME/.config/yorha/appearance/yorha-system.heic"
+swift bin/yorha-system-wallpaper.swift --inspect "$RUNTIME_HEIC"
+
+capture_wallpaper_paths() {
+  osascript <<'AS'
+tell application "System Events"
+  set wallpaperPaths to {}
+  repeat with desktopItem in every desktop
+    set desktopPicture to picture of desktopItem
+    set end of wallpaperPaths to POSIX path of (desktopPicture as alias)
+  end repeat
+end tell
+set AppleScript's text item delimiters to linefeed
+return wallpaperPaths as text
+AS
+}
+
+assert_all_desktops_use_runtime_heic() {
+  output="$1"
+  expected_count="$(osascript -e 'tell application "System Events" to count every desktop')"
+  seen=0
+  while IFS= read -r wallpaper_path || [ -n "$wallpaper_path" ]; do
+    [ -n "$wallpaper_path" ] || { echo "empty desktop wallpaper path" >&2; return 1; }
+    [ "$wallpaper_path" = "$RUNTIME_HEIC" ] \
+      || { echo "unexpected wallpaper: $wallpaper_path" >&2; return 1; }
+    seen=$((seen + 1))
+  done < "$output"
+  [ "$seen" -gt 0 ] && [ "$seen" -eq "$expected_count" ]
+}
+
+assert_sketchybar_field() {
+  item="$1"; field="$2"; expected="$3"
+  sketchybar --query "$item" | python3 -c '
+import json, sys
+value = json.load(sys.stdin)
+for key in sys.argv[1].split("."):
+    value = value[key]
+actual, expected = str(value), sys.argv[2]
+assert actual.lower() == expected.lower(), f"{sys.argv[1]}: {actual!r} != {expected!r}"
+' "$field" "$expected"
+}
+
+capture_wallpaper_paths > "$VERIFY_DIR/wallpaper.deployed"
+assert_all_desktops_use_runtime_heic "$VERIFY_DIR/wallpaper.deployed"
+
+REAL_SKETCHYBAR="$(command -v sketchybar)"
+PROBE="$VERIFY_DIR/sketchybar-probe"
+PROBE_LOG="$VERIFY_DIR/sketchybar-probe.log"
+cat > "$PROBE" <<'SH'
+#!/bin/sh
+printf '%s\n' "$*" >> "$YORHA_PROBE_LOG"
+exec "$YORHA_REAL_SKETCHYBAR" "$@"
+SH
+chmod +x "$PROBE"
+export YORHA_REAL_SKETCHYBAR="$REAL_SKETCHYBAR" YORHA_PROBE_LOG="$PROBE_LOG"
+
+YORHA_SKETCHYBAR_BIN="$PROBE" "$APPLY" light --force
+test "$(cat "$HOME/.config/yorha/appearance/last-successful-mode")" = light
+assert_sketchybar_field clock label.color 0xff4a4741
+assert_sketchybar_field date label.color 0xff4a4741
+assert_sketchybar_field yorha label.color 0xff4a4741
+assert_sketchybar_field yorha_icon background.image.value \
+  "$HOME/.config/yorha/appearance/yorha-icon-light.png"
+
+before_noop="$(wc -l < "$PROBE_LOG" | tr -d ' ')"
+YORHA_SKETCHYBAR_BIN="$PROBE" "$APPLY" light
+test "$(wc -l < "$PROBE_LOG" | tr -d ' ')" -eq "$before_noop"
+YORHA_SKETCHYBAR_BIN="$PROBE" "$APPLY" light --force
+test "$(wc -l < "$PROBE_LOG" | tr -d ' ')" -eq "$((before_noop + 1))"
+
+YORHA_SKETCHYBAR_BIN="$PROBE" "$APPLY" dark --force
+test "$(cat "$HOME/.config/yorha/appearance/last-successful-mode")" = dark
+assert_sketchybar_field clock label.color 0xffd8d4c4
+assert_sketchybar_field date label.color 0xffd8d4c4
+assert_sketchybar_field yorha label.color 0xffbc9a5a
+assert_sketchybar_field yorha_icon background.image.value \
+  "$HOME/.config/yorha/appearance/yorha-icon-dark.png"
+
+capture_wallpaper_paths > "$VERIFY_DIR/wallpaper.after-forced-modes"
+assert_all_desktops_use_runtime_heic "$VERIFY_DIR/wallpaper.after-forced-modes"
+diff -u "$VERIFY_DIR/wallpaper.deployed" "$VERIFY_DIR/wallpaper.after-forced-modes"
+YORHA_SKETCHYBAR_BIN="$PROBE" "$APPLY" "$(cat "$VERIFY_DIR/effective-mode")" --force
 ```
 
-For each forced mode, query `sketchybar --query` for clock/date/wordmark/icon properties. Forced coordinator modes intentionally affect only SketchyBar; the exact wallpaper-path diffs above must be empty. Do not change the macOS appearance setting or attempt to force a HEIC frame—Image I/O metadata plus macOS's native selection is the wallpaper contract.
+`capture_wallpaper_paths` emits one POSIX path per desktop. The assertion rejects empty entries, any repository or stale path, zero desktops, and a line count that differs from `System Events`' desktop count. The probe executes the real SketchyBar command while recording coordinator invocations, so the unchanged call count proves same-mode no-op and the increment proves `--force` bypasses it. Do not change the macOS appearance setting or attempt to force a HEIC frame.
 
 - [ ] **Step 8: Verify crash recovery and Ghostty isolation**
 
@@ -732,15 +997,16 @@ launchctl kill SIGTERM "gui/$UID_NOW/com.yorha.appearance-watcher"
 sleep 2
 launchctl print "gui/$UID_NOW/com.yorha.appearance-watcher"
 VERIFY_DIR="$(cat /tmp/yorha-appearance-verify-dir)"
+capture_wallpaper_paths > "$VERIFY_DIR/wallpaper.after-watcher-restart"
+assert_all_desktops_use_runtime_heic "$VERIFY_DIR/wallpaper.after-watcher-restart"
+diff -u "$VERIFY_DIR/wallpaper.deployed" "$VERIFY_DIR/wallpaper.after-watcher-restart"
 shasum -a 256 config/ghostty/config config/ghostty/config.ghostty \
   "$HOME/.config/ghostty/config" "$HOME/Library/Application Support/com.mitchellh.ghostty/config.ghostty" \
   > "$VERIFY_DIR/ghostty.after"
 diff -u "$VERIFY_DIR/ghostty.before" "$VERIFY_DIR/ghostty.after"
 ```
 
-Expected: launchd restarts the watcher and checksum diff is empty.
-
-Also query every desktop after watcher restart and compare it with `$VERIFY_DIR/wallpaper.deployed`; the assigned dynamic HEIC path must remain unchanged.
+Expected: launchd restarts the watcher, every enumerated desktop still has the runtime HEIC path, both diffs are empty, and the Ghostty checksum diff is empty. Run Steps 7 and 8 in the same verification shell so the exact `capture_wallpaper_paths` and `assert_all_desktops_use_runtime_heic` functions remain defined.
 
 - [ ] **Step 9: Commit and final check**
 
@@ -749,8 +1015,8 @@ git add bin/yorha-backup.sh docs/DECISIONS.md tests/test_deployment_contract.py
 git add -p README.md
 git commit -m "docs: document and restore appearance switching"
 git status --short
-git log --oneline -7
-git diff --check HEAD~6..HEAD
+git log --oneline f9fd880..HEAD
+git diff --check f9fd880..HEAD
 ```
 
-Expected: only intentionally unabsorbed user changes remain; six feature commits are visible; no whitespace errors.
+Expected: only intentionally unabsorbed user changes remain; every commit after the recorded feature base is shown without relying on a fixed count; no whitespace errors.

@@ -148,6 +148,7 @@ Verification records checksums for both tracked Ghostty configuration files and 
 
 - Invalid mode: reject without changing any surface.
 - Missing or invalid committed HEIC during deployment: abort before wallpaper assignment.
+- Deployment copy, wallpaper assignment, watcher compilation, or LaunchAgent bootstrap failure: report the failing component and leave already-installed independent components recoverable by an idempotent redeploy or restore.
 - Missing selected crest at runtime: reject that mode before changing SketchyBar.
 - Concurrent notifications: serialize coordinator runs and coalesce watcher callbacks.
 - SketchyBar absent or update failure: report nonzero without advancing the successful-mode marker, then retry after wake or the next event. A later SketchyBar reload applies the current mode itself.
@@ -206,7 +207,7 @@ Live tests may temporarily change the bar, but they do not change the macOS appe
 - Manual and scheduled system appearance changes update wallpaper, widgets, and SketchyBar automatically without a user command.
 - The switch is prompt, does not flash an intermediate palette, and does not replay widget entrance animations.
 - Sleep/wake and watcher restart converge on the effective appearance.
-- Partial failures are logged and retryable.
+- Independent deployment/runtime component failures are logged and recoverable; the SketchyBar-only coordinator has no multi-surface partial-success state.
 - Every desktop retains the single assigned dynamic HEIC path, and macOS selects its correct Light/Dark frame natively.
 - Ghostty stays dark and all Ghostty configuration checksums remain unchanged.
 - Repeated deployment and restoration are safe and leave no duplicate LaunchAgent jobs or stale runtime assets.
