@@ -190,6 +190,20 @@ class ApplyAppearanceTests(unittest.TestCase):
             "YORHA_TEST_LOCK_PATH": str(self.lock),
         }
 
+    def write_ordered_signaling_mkdir(self, exit_code, signals):
+        bash_env = Path(self.tempdir.name) / f"signal-mkdir-{exit_code}.bash"
+        signal_commands = "\n".join(
+            f'  builtin kill -{signal_name} "$$"' for signal_name in signals
+        )
+        bash_env.write_text(
+            "mkdir() {\n"
+            '  /bin/mkdir "$@" 2>/dev/null || true\n'
+            f"{signal_commands}\n"
+            f"  return {exit_code}\n"
+            "}\n"
+        )
+        return {"BASH_ENV": str(bash_env)}
+
     def test_signal_after_successful_mkdir_before_ownership_cleans_our_lock(self):
         result = self.run_apply("dark", extra_env=self.write_signaling_mkdir(exit_code=0))
         self.assertEqual(result.returncode, 130)
@@ -201,6 +215,31 @@ class ApplyAppearanceTests(unittest.TestCase):
         self.lock.mkdir()
         result = self.run_apply("dark", extra_env=self.write_signaling_mkdir(exit_code=1))
         self.assertEqual(result.returncode, 130)
+        self.assertTrue(self.lock.is_dir())
+        self.assertFalse(self.state.exists())
+        self.assertEqual(self.call_argvs(), [])
+
+    def test_first_signal_wins_during_successful_mkdir_boundary(self):
+        result = self.run_apply(
+            "dark",
+            extra_env=self.write_ordered_signaling_mkdir(
+                exit_code=0, signals=("INT", "TERM")
+            ),
+        )
+        self.assertEqual(result.returncode, 130)
+        self.assertFalse(self.lock.exists())
+        self.assertFalse(self.state.exists())
+        self.assertEqual(self.call_argvs(), [])
+
+    def test_first_signal_wins_during_failed_mkdir_boundary(self):
+        self.lock.mkdir()
+        result = self.run_apply(
+            "dark",
+            extra_env=self.write_ordered_signaling_mkdir(
+                exit_code=1, signals=("TERM", "INT")
+            ),
+        )
+        self.assertEqual(result.returncode, 143)
         self.assertTrue(self.lock.is_dir())
         self.assertFalse(self.state.exists())
         self.assertEqual(self.call_argvs(), [])

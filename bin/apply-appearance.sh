@@ -58,7 +58,9 @@ terminate_sketchybar() {
 on_signal() {
   status="$1"
   if [ "$LOCK_ACQUISITION_PENDING" -eq 1 ]; then
-    PENDING_SIGNAL_STATUS="$status"
+    if [ "$PENDING_SIGNAL_STATUS" -eq 0 ]; then
+      PENDING_SIGNAL_STATUS="$status"
+    fi
     return
   fi
   trap - EXIT INT TERM
