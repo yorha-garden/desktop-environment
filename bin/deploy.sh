@@ -74,8 +74,9 @@ PRIOR_INT_HANDLER="$(extract_appearance_trap_handler "$PRIOR_INT_TRAP")"
 PRIOR_TERM_HANDLER="$(extract_appearance_trap_handler "$PRIOR_TERM_TRAP")"
 
 cleanup_appearance_temps() {
-  for pending in "$INSTALL_TMP" "$WATCHER_TMP" "$PLIST_TMP"; do
-    [ -z "$pending" ] || rm -f -- "$pending"
+  local yorha_appearance_pending
+  for yorha_appearance_pending in "$INSTALL_TMP" "$WATCHER_TMP" "$PLIST_TMP"; do
+    [ -z "$yorha_appearance_pending" ] || rm -f -- "$yorha_appearance_pending"
   done
 }
 
@@ -134,15 +135,18 @@ trap 'YORHA_APPEARANCE_SIGNAL_CONTEXT_STATUS=$?; prepare_appearance_signal INT 1
 trap 'YORHA_APPEARANCE_SIGNAL_CONTEXT_STATUS=$?; prepare_appearance_signal TERM 143; if [ -n "$YORHA_APPEARANCE_PRIOR_SIGNAL_DEFINITION" ]; then if [ -n "$YORHA_APPEARANCE_PRIOR_SIGNAL_HANDLER" ]; then YORHA_APPEARANCE_DISPATCH_STATUS="$YORHA_APPEARANCE_SIGNAL_CONTEXT_STATUS"; yorha_appearance_return_dispatch_status || eval "$YORHA_APPEARANCE_PRIOR_SIGNAL_HANDLER"; fi; exit "$YORHA_APPEARANCE_SIGNAL_EXIT_STATUS"; fi; kill -s "$YORHA_APPEARANCE_SIGNAL_NAME" "$$"; exit "$YORHA_APPEARANCE_SIGNAL_EXIT_STATUS"' TERM
 
 install_atomic() {
-  source="$1"
-  destination="$2"
-  temporary="${destination}.tmp.$$"
-  INSTALL_TMP="$temporary"
-  cp "$source" "$temporary"
+  local yorha_appearance_source
+  local yorha_appearance_destination
+  local yorha_appearance_temporary
+  yorha_appearance_source="$1"
+  yorha_appearance_destination="$2"
+  yorha_appearance_temporary="${yorha_appearance_destination}.tmp.$$"
+  INSTALL_TMP="$yorha_appearance_temporary"
+  cp "$yorha_appearance_source" "$yorha_appearance_temporary"
   if [ "${3:-}" = executable ]; then
-    chmod +x "$temporary"
+    chmod +x "$yorha_appearance_temporary"
   fi
-  mv "$temporary" "$destination"
+  mv "$yorha_appearance_temporary" "$yorha_appearance_destination"
   INSTALL_TMP=""
 }
 

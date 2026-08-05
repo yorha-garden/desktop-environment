@@ -28,9 +28,11 @@ class DeploymentContractTests(unittest.TestCase):
         helper = re.search(r"install_atomic\(\) \{(?P<body>.*?)\n\}", block, re.S)
         self.assertIsNotNone(helper)
         body = helper.group("body")
-        self.assertIn('temporary="${destination}.tmp.$$"', body)
-        self.assertLess(body.index('cp "$source" "$temporary"'),
-                        body.index('mv "$temporary" "$destination"'))
+        self.assertIn(
+            'yorha_appearance_temporary="${yorha_appearance_destination}.tmp.$$"', body)
+        self.assertLess(
+            body.index('cp "$yorha_appearance_source" "$yorha_appearance_temporary"'),
+            body.index('mv "$yorha_appearance_temporary" "$yorha_appearance_destination"'))
         for call in (
             'install_atomic "$REPO/assets/yorha-system.heic" "$RUNTIME_WALLPAPER"',
             'install_atomic "$REPO/assets/yorha-icon-light.png" "$APPEARANCE/yorha-icon-light.png"',
@@ -54,8 +56,9 @@ class DeploymentContractTests(unittest.TestCase):
         helper = re.search(r"install_atomic\(\) \{(?P<body>.*?)\n\}", block, re.S)
         self.assertIsNotNone(helper)
         body = helper.group("body")
-        self.assertLess(body.index('chmod +x "$temporary"'),
-                        body.index('mv "$temporary" "$destination"'))
+        self.assertLess(body.index('chmod +x "$yorha_appearance_temporary"'),
+                        body.index('mv "$yorha_appearance_temporary" '
+                                   '"$yorha_appearance_destination"'))
         self.assertIn('install_atomic "$REPO/bin/apply-appearance.sh" '
                       '"$RUNTIME_COORDINATOR" executable', block)
         self.assertRegex(block, r'swiftc -O .*appearance-watcher\.swift" -o "\$WATCHER_TMP"')
@@ -243,6 +246,21 @@ printf 'after-block\n' >> "$YORHA_TRAP_LOG"
         path.chmod(0o755)
         return path
 
+    def make_helper_scope_trap_script(self):
+        path = self.base / "appearance-runtime-helper-scope.sh"
+        path.write_text(r'''#!/usr/bin/env bash
+set -euo pipefail
+REPO="$TEST_REPO"
+say() { printf '  %s\n' "$*"; }
+pending=outer-pending
+source=outer-source
+destination=outer-destination
+temporary=outer-temporary
+trap 'printf "prior-exit:%s:%s:%s:%s:%s\n" "$?" "$pending" "$source" "$destination" "$temporary" >> "$YORHA_TRAP_LOG"' EXIT
+''' + self.block)
+        path.chmod(0o755)
+        return path
+
     def make_recursive_signal_script(self):
         path = self.base / "appearance-runtime-recursive-term.sh"
         path.write_text(r'''#!/usr/bin/env bash
@@ -334,6 +352,19 @@ printf 'after-block\n' >> "$YORHA_TRAP_LOG"
         trap_log = Path(self.env["YORHA_TRAP_LOG"])
         self.assertEqual(trap_log.read_text().splitlines(),
                          ["prior-exit:91:outer-handler"])
+        self.assertEqual(self.pending_temps(), [])
+
+    def test_failed_block_preserves_outer_helper_scratch_variables(self):
+        env = self.env.copy()
+        env["YORHA_DEPLOY_FAIL"] = "cp"
+        result = subprocess.run(
+            ["/bin/bash", str(self.make_helper_scope_trap_script())], cwd=ROOT,
+            env=env, text=True, capture_output=True, timeout=15)
+        self.assertEqual(result.returncode, 91, result.stderr)
+        trap_log = Path(self.env["YORHA_TRAP_LOG"])
+        self.assertEqual(trap_log.read_text().splitlines(), [
+            "prior-exit:91:outer-pending:outer-source:outer-destination:outer-temporary",
+        ])
         self.assertEqual(self.pending_temps(), [])
 
     def test_signal_cleans_then_dispatches_prior_handler_and_stops(self):
