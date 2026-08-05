@@ -1,4 +1,4 @@
-import plistlib, re, unittest
+import os, plistlib, re, signal, subprocess, tempfile, time, unittest
 from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -51,11 +51,45 @@ class DeploymentContractTests(unittest.TestCase):
 
     def test_watcher_plist_and_coordinator_install_contract(self):
         block = self.appearance_block()
+        helper = re.search(r"install_atomic\(\) \{(?P<body>.*?)\n\}", block, re.S)
+        self.assertIsNotNone(helper)
+        body = helper.group("body")
+        self.assertLess(body.index('chmod +x "$temporary"'),
+                        body.index('mv "$temporary" "$destination"'))
+        self.assertIn('install_atomic "$REPO/bin/apply-appearance.sh" '
+                      '"$RUNTIME_COORDINATOR" executable', block)
         self.assertRegex(block, r'swiftc -O .*appearance-watcher\.swift" -o "\$WATCHER_TMP"')
         self.assertLess(block.index('swiftc -O '),
                         block.index('mv "$WATCHER_TMP" "$RUNTIME_WATCHER"'))
+        cleanup = re.search(r"cleanup_appearance_temps\(\) \{(?P<body>.*?)\n\}", block, re.S)
+        self.assertIsNotNone(cleanup)
+        for pending in ("INSTALL_TMP", "WATCHER_TMP", "PLIST_TMP"):
+            self.assertIn(pending, cleanup.group("body"))
+        for event in ("EXIT", "HUP", "INT", "TERM"):
+            self.assertRegex(block, rf"trap [^\n]+\b{event}\b")
         self.assertEqual(block.count('launchctl bootstrap "gui/$(id -u)" "$APPEARANCE_PLIST"'), 1)
         self.assertEqual(block.count('"$RUNTIME_COORDINATOR" "$MODE" --force'), 1)
+
+    def test_plist_rendering_is_argv_safe_linted_and_ordered(self):
+        block = self.appearance_block()
+        self.assertNotRegex(block, r"\bsed\b")
+        self.assertIn('-replace ProgramArguments -array', block)
+        for index in (0, 1):
+            self.assertIn(f'-insert ProgramArguments.{index} -string', block)
+        for key in ("StandardOutPath", "StandardErrorPath"):
+            self.assertIn(f'-replace {key} -string', block)
+        lint = block.index(' -lint "$PLIST_TMP"')
+        plist_move = block.index('mv "$PLIST_TMP" "$APPEARANCE_PLIST"')
+        assignment = block.index('osascript - "$RUNTIME_WALLPAPER"')
+        bootout = block.index('launchctl bootout "gui/$(id -u)/com.yorha.appearance-watcher"')
+        bootstrap = block.index('launchctl bootstrap "gui/$(id -u)" "$APPEARANCE_PLIST"')
+        coordinator = block.index('"$RUNTIME_COORDINATOR" "$MODE" --force')
+        self.assertLess(lint, plist_move)
+        self.assertLess(assignment, bootstrap)
+        self.assertLess(bootout, bootstrap)
+        self.assertLess(bootstrap, coordinator)
+        self.assertIn("|| say", block[coordinator:block.index("# ---", coordinator)
+                                      if "# ---" in block[coordinator:] else len(block)])
 
     def test_bar_resolves_mode_before_defaults(self):
         text = (ROOT / "config/sketchybar/sketchybarrc").read_text()
@@ -79,3 +113,142 @@ class DeploymentContractTests(unittest.TestCase):
         for forbidden in ("osascript", "wallpaperagent", "wallpaper_", "assets.env",
                           "chrome", "regenerate-system-wallpaper", "übersicht", "ubersicht"):
             self.assertNotIn(forbidden, text)
+
+
+class DeploymentSandboxTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.base = Path(self.temporary.name)
+        self.home = self.base / "home & pipe| less< dollar$ spaces"
+        self.fake_bin = self.base / "fake-bin"
+        self.home.mkdir()
+        self.fake_bin.mkdir()
+        self.script = self.base / "appearance-runtime.sh"
+        text = (ROOT / "bin/deploy.sh").read_text()
+        block = text.split("# --- appearance runtime BEGIN", 1)[1].split(
+            "# --- appearance runtime END", 1)[0]
+        self.script.write_text(
+            '#!/usr/bin/env bash\nset -euo pipefail\nREPO="$TEST_REPO"\n'
+            "say() { printf '  %s\\n' \"$*\"; }\n" + block)
+        self.script.chmod(0o755)
+        self.env = os.environ.copy()
+        self.env.update({
+            "HOME": str(self.home),
+            "PATH": f"{self.fake_bin}:/usr/bin:/bin:/usr/sbin:/sbin",
+            "TEST_REPO": str(ROOT),
+            "YORHA_PLUTIL": str(self.fake_bin / "plutil"),
+            "YORHA_SIGNAL_READY": str(self.base / "signal-ready"),
+        })
+        self.write_stub("cp", r'''#!/bin/bash
+if [ "${YORHA_DEPLOY_FAIL:-}" = cp ] && [[ "$1" == */assets/yorha-system.heic ]]; then
+  printf partial > "$2"
+  exit 91
+fi
+exec /bin/cp "$@"
+''')
+        self.write_stub("chmod", r'''#!/bin/bash
+for target in "$@"; do :; done
+if [ "${YORHA_DEPLOY_FAIL:-}" = chmod ] && [[ "$target" == */apply-appearance.sh.tmp.* ]]; then
+  exit 92
+fi
+exec /bin/chmod "$@"
+''')
+        self.write_stub("swift", "#!/bin/bash\nexit 0\n")
+        self.write_stub("swiftc", r'''#!/bin/bash
+output=
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = -o ]; then
+    shift
+    output="$1"
+  fi
+  shift
+done
+if [ "${YORHA_DEPLOY_FAIL:-}" = compile ]; then
+  printf partial > "$output"
+  exit 93
+fi
+if [ "${YORHA_DEPLOY_FAIL:-}" = signal ]; then
+  printf partial > "$output"
+  : > "$YORHA_SIGNAL_READY"
+  while :; do sleep 1; done
+fi
+printf '#!/bin/bash\nexit 0\n' > "$output"
+''')
+        self.write_stub("plutil", r'''#!/bin/bash
+if [ "${YORHA_DEPLOY_FAIL:-}" = lint ] && [ "$1" = -lint ]; then
+  exit 94
+fi
+exec /usr/bin/plutil "$@"
+''')
+        self.write_stub("launchctl", "#!/bin/bash\nexit 0\n")
+        self.write_stub("osascript", "#!/bin/bash\nexit 0\n")
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def write_stub(self, name, contents):
+        path = self.fake_bin / name
+        path.write_text(contents)
+        path.chmod(0o755)
+
+    def run_block(self, failure=None):
+        env = self.env.copy()
+        if failure:
+            env["YORHA_DEPLOY_FAIL"] = failure
+        return subprocess.run(["/bin/bash", str(self.script)], cwd=ROOT, env=env,
+                              text=True, capture_output=True, timeout=15)
+
+    def pending_temps(self):
+        return list(self.home.rglob("*.tmp.*"))
+
+    def test_special_home_renders_exact_parseable_runtime_plist(self):
+        result = self.run_block()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        plist_path = self.home / "Library/LaunchAgents/com.yorha.appearance-watcher.plist"
+        with plist_path.open("rb") as handle:
+            data = plistlib.load(handle)
+        runtime_bin = self.home / ".config/yorha/bin"
+        log = str(self.home / ".config/yorha/logs/appearance.log")
+        self.assertEqual(data["ProgramArguments"], [
+            str(runtime_bin / "yorha-appearance-watcher"),
+            str(runtime_bin / "apply-appearance.sh"),
+        ])
+        self.assertEqual(data["StandardOutPath"], log)
+        self.assertEqual(data["StandardErrorPath"], log)
+        self.assertEqual(self.pending_temps(), [])
+
+    def test_failures_preserve_destinations_and_remove_pending_temps(self):
+        cases = (
+            ("cp", self.home / ".config/yorha/appearance/yorha-system.heic"),
+            ("chmod", self.home / ".config/yorha/bin/apply-appearance.sh"),
+            ("compile", self.home / ".config/yorha/bin/yorha-appearance-watcher"),
+            ("lint", self.home / "Library/LaunchAgents/com.yorha.appearance-watcher.plist"),
+        )
+        for failure, destination in cases:
+            with self.subTest(failure=failure):
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_text(f"prior-{failure}")
+                result = self.run_block(failure)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(destination.read_text(), f"prior-{failure}")
+                self.assertEqual(self.pending_temps(), [])
+
+    def test_signal_preserves_watcher_and_removes_pending_temp(self):
+        watcher = self.home / ".config/yorha/bin/yorha-appearance-watcher"
+        watcher.parent.mkdir(parents=True, exist_ok=True)
+        watcher.write_text("prior-signal")
+        env = self.env.copy()
+        env["YORHA_DEPLOY_FAIL"] = "signal"
+        process = subprocess.Popen(["/bin/bash", str(self.script)], cwd=ROOT, env=env,
+                                   text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   start_new_session=True)
+        deadline = time.monotonic() + 5
+        ready = Path(self.env["YORHA_SIGNAL_READY"])
+        while not ready.exists() and process.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.02)
+        self.assertTrue(ready.exists(), "sandbox did not reach watcher compilation")
+        os.killpg(process.pid, signal.SIGTERM)
+        process.communicate(timeout=5)
+        self.assertNotEqual(process.returncode, 0)
+        self.assertEqual(watcher.read_text(), "prior-signal")
+        self.assertEqual(self.pending_temps(), [])

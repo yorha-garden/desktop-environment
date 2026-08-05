@@ -48,12 +48,39 @@ YORHA_BIN="$HOME/.config/yorha/bin"
 mkdir -p "$APPEARANCE" "$YORHA_BIN" "$HOME/.config/yorha/logs" \
   "$HOME/Library/LaunchAgents"
 
+INSTALL_TMP=""
+WATCHER_TMP=""
+PLIST_TMP=""
+
+cleanup_appearance_temps() {
+  for pending in "$INSTALL_TMP" "$WATCHER_TMP" "$PLIST_TMP"; do
+    [ -z "$pending" ] || rm -f -- "$pending"
+  done
+}
+
+abort_appearance_install() {
+  signal_status="$1"
+  trap - EXIT HUP INT TERM
+  cleanup_appearance_temps
+  exit "$signal_status"
+}
+
+trap cleanup_appearance_temps EXIT
+trap 'abort_appearance_install 129' HUP
+trap 'abort_appearance_install 130' INT
+trap 'abort_appearance_install 143' TERM
+
 install_atomic() {
   source="$1"
   destination="$2"
   temporary="${destination}.tmp.$$"
+  INSTALL_TMP="$temporary"
   cp "$source" "$temporary"
+  if [ "${3:-}" = executable ]; then
+    chmod +x "$temporary"
+  fi
   mv "$temporary" "$destination"
+  INSTALL_TMP=""
 }
 
 "$REPO/bin/make-wallpaper.sh" --verify
@@ -63,13 +90,13 @@ RUNTIME_WATCHER="$YORHA_BIN/yorha-appearance-watcher"
 install_atomic "$REPO/assets/yorha-system.heic" "$RUNTIME_WALLPAPER"
 install_atomic "$REPO/assets/yorha-icon-light.png" "$APPEARANCE/yorha-icon-light.png"
 install_atomic "$REPO/assets/yorha-icon-dark.png" "$APPEARANCE/yorha-icon-dark.png"
-install_atomic "$REPO/bin/apply-appearance.sh" "$RUNTIME_COORDINATOR"
-chmod +x "$RUNTIME_COORDINATOR"
+install_atomic "$REPO/bin/apply-appearance.sh" "$RUNTIME_COORDINATOR" executable
 
 WATCHER_TMP="$RUNTIME_WATCHER.tmp.$$"
 swiftc -O "$REPO/bin/appearance-watcher.swift" -o "$WATCHER_TMP"
 chmod +x "$WATCHER_TMP"
 mv "$WATCHER_TMP" "$RUNTIME_WATCHER"
+WATCHER_TMP=""
 
 osascript - "$RUNTIME_WALLPAPER" <<'AS'
 on run argv
@@ -79,8 +106,16 @@ AS
 
 APPEARANCE_PLIST="$HOME/Library/LaunchAgents/com.yorha.appearance-watcher.plist"
 PLIST_TMP="$APPEARANCE_PLIST.tmp.$$"
-sed "s|HOME_PATH|$HOME|g" "$REPO/launchd/com.yorha.appearance-watcher.plist" > "$PLIST_TMP"
+PLUTIL="${YORHA_PLUTIL:-/usr/bin/plutil}"
+cp "$REPO/launchd/com.yorha.appearance-watcher.plist" "$PLIST_TMP"
+"$PLUTIL" -replace ProgramArguments -array -- "$PLIST_TMP"
+"$PLUTIL" -insert ProgramArguments.0 -string "$RUNTIME_WATCHER" -- "$PLIST_TMP"
+"$PLUTIL" -insert ProgramArguments.1 -string "$RUNTIME_COORDINATOR" -- "$PLIST_TMP"
+"$PLUTIL" -replace StandardOutPath -string "$HOME/.config/yorha/logs/appearance.log" -- "$PLIST_TMP"
+"$PLUTIL" -replace StandardErrorPath -string "$HOME/.config/yorha/logs/appearance.log" -- "$PLIST_TMP"
+"$PLUTIL" -lint "$PLIST_TMP"
 mv "$PLIST_TMP" "$APPEARANCE_PLIST"
+PLIST_TMP=""
 launchctl bootout "gui/$(id -u)/com.yorha.appearance-watcher" >/dev/null 2>&1 || true
 launchctl bootstrap "gui/$(id -u)" "$APPEARANCE_PLIST"
 if [ "$(defaults read -g AppleInterfaceStyle 2>/dev/null || true)" = Dark ]; then
@@ -90,6 +125,7 @@ else
 fi
 "$RUNTIME_COORDINATOR" "$MODE" --force \
   || say "appearance -> watcher installed; SketchyBar update will retry"
+trap - EXIT HUP INT TERM
 # --- appearance runtime END
 
 # --- aerospace (installed but intentionally not running) -------------------
