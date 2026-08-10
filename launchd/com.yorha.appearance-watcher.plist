@@ -10,6 +10,11 @@
     <string>HOME_PATH/.config/yorha/bin/yorha-appearance-watcher</string>
     <string>HOME_PATH/.config/yorha/bin/apply-appearance.sh</string>
   </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>YORHA_SKETCHYBAR_BIN</key>
+    <string>SKETCHYBAR_PATH</string>
+  </dict>
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>

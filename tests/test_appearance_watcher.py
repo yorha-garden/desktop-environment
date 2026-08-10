@@ -228,6 +228,10 @@ fi
                 "HOME_PATH/.config/yorha/bin/apply-appearance.sh",
             ],
         )
+        self.assertEqual(
+            values["EnvironmentVariables"],
+            {"YORHA_SKETCHYBAR_BIN": "SKETCHYBAR_PATH"},
+        )
         self.assertTrue(values["RunAtLoad"])
         self.assertTrue(values["KeepAlive"])
         self.assertEqual(values["ProcessType"], "Background")
