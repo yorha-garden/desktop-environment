@@ -75,6 +75,9 @@ class DeploymentContractTests(unittest.TestCase):
             self.assertRegex(block, rf"trap [^\n]+\b{event}\b")
         self.assertEqual(block.count('launchctl bootstrap "gui/$(id -u)" "$APPEARANCE_PLIST"'), 1)
         self.assertEqual(block.count('"$RUNTIME_COORDINATOR" "$MODE" --force'), 1)
+        self.assertIn('APPEARANCE_SKETCHYBAR_BIN="${SB_BIN:-}"', block)
+        self.assertIn('command -v sketchybar', block)
+        self.assertIn('[ ! -x "$APPEARANCE_SKETCHYBAR_BIN" ]', block)
 
     def test_plist_rendering_is_argv_safe_linted_and_ordered(self):
         block = self.appearance_block()
@@ -82,6 +85,15 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertIn('-replace ProgramArguments -array', block)
         for index in (0, 1):
             self.assertIn(f'-insert ProgramArguments.{index} -string', block)
+        self.assertIn(
+            '-replace EnvironmentVariables.YORHA_SKETCHYBAR_BIN '
+            '-string "$APPEARANCE_SKETCHYBAR_BIN"',
+            block,
+        )
+        self.assertIn(
+            'YORHA_SKETCHYBAR_BIN="$APPEARANCE_SKETCHYBAR_BIN"',
+            block,
+        )
         for key in ("StandardOutPath", "StandardErrorPath"):
             self.assertIn(f'-replace {key} -string', block)
         lint = block.index(' -lint "$PLIST_TMP"')
@@ -165,6 +177,13 @@ class DeploymentSandboxTests(unittest.TestCase):
         self.fake_bin = self.base / "fake-bin"
         self.home.mkdir()
         self.fake_bin.mkdir()
+        self.sketchybar = self.base / "SketchyBar executable & live"
+        self.sketchybar.write_text(
+            "#!/bin/bash\n"
+            "printf '%s\n' \"$*\" >> \"$YORHA_TEST_SKETCHYBAR_LOG\"\n"
+        )
+        self.sketchybar.chmod(0o755)
+        self.sketchybar_log = self.base / "sketchybar.log"
         self.script = self.base / "appearance-runtime.sh"
         text = (ROOT / "bin/deploy.sh").read_text()
         block = text.split("# --- appearance runtime BEGIN", 1)[1].split(
@@ -172,6 +191,7 @@ class DeploymentSandboxTests(unittest.TestCase):
         self.block = block
         self.script.write_text(
             '#!/usr/bin/env bash\nset -euo pipefail\nREPO="$TEST_REPO"\n'
+            'SB_BIN="$YORHA_TEST_SKETCHYBAR_BIN"\n'
             "say() { printf '  %s\\n' \"$*\"; }\n" + block)
         self.script.chmod(0o755)
         self.env = os.environ.copy()
@@ -185,6 +205,9 @@ class DeploymentSandboxTests(unittest.TestCase):
             "YORHA_RESTORE_READY": str(self.base / "restore-ready"),
             "YORHA_HANDLER_READY": str(self.base / "handler-ready"),
             "YORHA_TRAP_LOG": str(self.base / "trap.log"),
+            "YORHA_TEST_SKETCHYBAR_BIN": str(self.sketchybar),
+            "YORHA_TEST_SKETCHYBAR_LOG": str(self.sketchybar_log),
+            "SB_BIN": str(self.sketchybar),
         })
         self.write_stub("cp", r'''#!/bin/bash
 if [ "${YORHA_DEPLOY_FAIL:-}" = cp ] && [[ "$1" == */assets/yorha-system.heic ]]; then
@@ -478,7 +501,26 @@ printf 'after-block\n' >> "$YORHA_TRAP_LOG"
         ])
         self.assertEqual(data["StandardOutPath"], log)
         self.assertEqual(data["StandardErrorPath"], log)
+        self.assertEqual(
+            data["EnvironmentVariables"],
+            {"YORHA_SKETCHYBAR_BIN": str(self.sketchybar)},
+        )
+        self.assertTrue(self.sketchybar_log.is_file())
+        arguments = self.sketchybar_log.read_text().splitlines()
+        self.assertTrue(any("--set clock" in line for line in arguments), arguments)
+        self.assertFalse(any("--reload" in line for line in arguments), arguments)
         self.assertEqual(self.pending_temps(), [])
+
+    def test_missing_sketchybar_stops_before_appearance_runtime_mutation(self):
+        env = self.env.copy()
+        env["YORHA_TEST_SKETCHYBAR_BIN"] = ""
+        result = subprocess.run(
+            ["/bin/bash", str(self.script)], cwd=ROOT, env=env,
+            text=True, capture_output=True, timeout=15,
+        )
+        self.assertEqual(result.returncode, 69)
+        self.assertIn("missing SketchyBar executable", result.stderr)
+        self.assertFalse((self.home / ".config/yorha/appearance").exists())
 
     def test_failures_preserve_destinations_and_remove_pending_temps(self):
         cases = (

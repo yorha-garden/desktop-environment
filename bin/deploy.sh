@@ -43,6 +43,22 @@ command -v sketchybar >/dev/null && sketchybar --reload >/dev/null 2>&1 || true
 say "sketchybar -> ~/.config/sketchybar/ (rc + crest, reloaded)"
 
 # --- appearance runtime BEGIN
+APPEARANCE_SKETCHYBAR_BIN="${SB_BIN:-}"
+if [ -z "$APPEARANCE_SKETCHYBAR_BIN" ]; then
+  APPEARANCE_SKETCHYBAR_BIN="$(command -v sketchybar || true)"
+fi
+case "$APPEARANCE_SKETCHYBAR_BIN" in
+  /*) ;;
+  *)
+    echo "missing SketchyBar executable; install SketchyBar and rerun deploy" >&2
+    exit 69
+    ;;
+esac
+if [ ! -x "$APPEARANCE_SKETCHYBAR_BIN" ]; then
+  echo "missing SketchyBar executable: $APPEARANCE_SKETCHYBAR_BIN" >&2
+  exit 69
+fi
+
 APPEARANCE="$HOME/.config/yorha/appearance"
 YORHA_BIN="$HOME/.config/yorha/bin"
 mkdir -p "$APPEARANCE" "$YORHA_BIN" "$HOME/.config/yorha/logs" \
@@ -179,6 +195,7 @@ cp "$REPO/launchd/com.yorha.appearance-watcher.plist" "$PLIST_TMP"
 "$PLUTIL" -replace ProgramArguments -array -- "$PLIST_TMP"
 "$PLUTIL" -insert ProgramArguments.0 -string "$RUNTIME_WATCHER" -- "$PLIST_TMP"
 "$PLUTIL" -insert ProgramArguments.1 -string "$RUNTIME_COORDINATOR" -- "$PLIST_TMP"
+"$PLUTIL" -replace EnvironmentVariables.YORHA_SKETCHYBAR_BIN -string "$APPEARANCE_SKETCHYBAR_BIN" -- "$PLIST_TMP"
 "$PLUTIL" -replace StandardOutPath -string "$HOME/.config/yorha/logs/appearance.log" -- "$PLIST_TMP"
 "$PLUTIL" -replace StandardErrorPath -string "$HOME/.config/yorha/logs/appearance.log" -- "$PLIST_TMP"
 "$PLUTIL" -lint "$PLIST_TMP"
@@ -191,7 +208,8 @@ if [ "$(defaults read -g AppleInterfaceStyle 2>/dev/null || true)" = Dark ]; the
 else
   MODE=light
 fi
-"$RUNTIME_COORDINATOR" "$MODE" --force \
+YORHA_SKETCHYBAR_BIN="$APPEARANCE_SKETCHYBAR_BIN" \
+  "$RUNTIME_COORDINATOR" "$MODE" --force \
   || say "appearance -> watcher installed; SketchyBar update will retry"
 restore_appearance_traps
 # --- appearance runtime END
