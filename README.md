@@ -47,7 +47,7 @@ to see exactly what changed on the machine.
 | `assets/wallpaper.svg` / `wallpaper-dark.svg` | Developer SVG sources for the matching light and dark wallpaper frames. |
 | `assets/yorha-system.heic` | Committed two-frame 5120×2880 dynamic wallpaper; deployment copies and assigns it once, then macOS owns frame selection. |
 | `assets/yorha-icon-light.png` / `yorha-icon-dark.png` | Fixed-name SketchyBar crests copied into the appearance runtime tree. |
-| `launchd/` | Three feature-owned agents: the oracle timer, Übersicht watchdog, and appearance watcher. |
+| `launchd/` | Four agents: the oracle timer, Übersicht watchdog, SketchyBar minute-boundary event, and appearance watcher. |
 | `docs/` | Architecture, palette, and the decision log. |
 
 ---
@@ -227,6 +227,12 @@ class a widget defines gets a widget prefix, no exceptions.
 the bar is rendering perfectly on screen. Verify visibility with eyes or the
 window server, not with queries — half an hour was once spent "fixing" a bar that
 was never broken.
+
+**A relative SketchyBar `update_freq` does not align to wall-clock boundaries.**
+The clock once polled every 10 seconds and could trail the macOS menu-bar clock by
+the full 10 seconds. `com.yorha.sketchybar-minute` now uses launchd's calendar
+schedule to trigger `yorha_minute` at each system minute, with `system_woke` as an
+immediate catch-up event. There is no one-second polling loop.
 
 **A widget with `refreshFrequency` but no `command` never re-renders.** Übersicht
 only creates the refresh timer for widgets that have a command; a widget that

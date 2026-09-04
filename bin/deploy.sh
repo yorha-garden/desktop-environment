@@ -42,6 +42,20 @@ chmod +x "$HOME/.config/sketchybar/sketchybarrc"
 command -v sketchybar >/dev/null && sketchybar --reload >/dev/null 2>&1 || true
 say "sketchybar -> ~/.config/sketchybar/ (rc + crest, reloaded)"
 
+# Drive the clock from macOS wall-clock minute boundaries instead of a relative
+# SketchyBar poll, which drifts according to the bar's startup phase.
+SB_BIN="$(command -v sketchybar || true)"
+if [ -n "$SB_BIN" ]; then
+  mkdir -p "$HOME/Library/LaunchAgents" "$HOME/.config/yorha/cache"
+  SBPLIST="$HOME/Library/LaunchAgents/com.yorha.sketchybar-minute.plist"
+  sed -e "s|SKETCHYBAR_PATH|$SB_BIN|g" -e "s|HOME_PATH|$HOME|g" \
+      "$REPO/launchd/com.yorha.sketchybar-minute.plist" > "$SBPLIST"
+  launchctl bootout "gui/$(id -u)/com.yorha.sketchybar-minute" >/dev/null 2>&1 || true
+  launchctl bootstrap "gui/$(id -u)" "$SBPLIST" 2>/dev/null \
+    && say "clock     -> loaded (system minute boundaries)" \
+    || say "clock     -> plist written; load with: launchctl bootstrap gui/\$(id -u) $SBPLIST"
+fi
+
 # --- appearance runtime BEGIN
 APPEARANCE_SKETCHYBAR_BIN="${SB_BIN:-}"
 if [ -z "$APPEARANCE_SKETCHYBAR_BIN" ]; then

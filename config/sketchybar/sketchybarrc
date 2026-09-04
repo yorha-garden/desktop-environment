@@ -56,20 +56,25 @@ sketchybar --add item yorha left \
            --set yorha label="YoRHa" label.font="Cascadia Code:Bold:11.0" \
                        label.color=$BRAND padding_left=0
 
+# Emitted by launchd on wall-clock minute boundaries. A fixed update_freq starts
+# from SketchyBar's launch phase and can therefore trail macOS by the whole gap.
+sketchybar --add event yorha_minute
+
 sketchybar --add item clock right \
-           --set clock update_freq=10 label.color=$TEXT \
-                       script="sketchybar --set clock label=\"\$(date '+%H.%M')\""
+           --set clock label.color=$TEXT \
+                       script="sketchybar --set clock label=\"\$(date '+%H.%M')\"" \
+           --subscribe clock yorha_minute system_woke
 
 # Date, left of the clock. This replaced a CPU readout that could never agree
 # with the HUD's "Processor Load": identical formula, but sampled at a different
 # instant on a different cadence (15s vs 10s), against a metric that swung
 # 21% -> 46% -> 19% across four seconds. Two independent pollers of an
 # instantaneous value will always disagree; the fix was to stop showing it twice.
-# The date changes once a day, so there is nothing to desync.
+# The date shares the minute event so midnight and wake-from-sleep are exact too.
 sketchybar --add item date right \
-           --set date update_freq=60 \
-                      script="sketchybar --set date label=\"\$(date '+%a %d %b' | tr '[:lower:]' '[:upper:]')\"" \
-                      label.color=$TEXT
+           --set date script="sketchybar --set date label=\"\$(date '+%a %d %b' | tr '[:lower:]' '[:upper:]')\"" \
+                      label.color=$TEXT \
+           --subscribe date yorha_minute system_woke
 
 sketchybar --update
 

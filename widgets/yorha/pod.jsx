@@ -13,7 +13,7 @@
 // Overflow: the panel fits ~38 characters. Longer lines ping-pong (marquee
 // left, dwell, marquee back) instead of being silently clipped. Two of the
 // static reports below have ALWAYS overflowed and were being cut off unseen.
-export const refreshFrequency = 45000;
+export const refreshFrequency = 30000;
 
 // Line 1 = telemetry, line 2 = the oracle cache (or empty). Two lines keeps the
 // message text free of any delimiter collision.

@@ -4,7 +4,9 @@
 // freely — the JS template literal passes them verbatim to the shell. Never
 // backslash-escape quotes inside single-quoted awk; that corrupted the first
 // version of this widget (awk received a literal backslash and died).
-export const refreshFrequency = 10000;
+const HUD_REFRESH_SECONDS = 3;
+const NETWORK_REFRESH_SECONDS = 1;
+export const refreshFrequency = NETWORK_REFRESH_SECONDS * 1000;
 
 export const command = `
 CPU=$(ps -A -o %cpu | awk '{s+=$1} END {printf "%.0f", s/8}')
@@ -29,6 +31,8 @@ export const className = `
 // when the file changes): previous byte counters for the network rate, and a
 // flag so the entrance plays once per session instead of on every refresh.
 let prev = null;
+let telemetry = null;
+let nextTelemetryAt = 0;
 let booted = false;
 
 const fmtRate = (bps) => {
@@ -43,18 +47,30 @@ export const render = ({ output }) => {
   // consumes the entrance animation — bail out instead.
   if (!output || !output.trim()) return <div />;
   const parts = output.trim().split("|");
-  const cpu  = parseInt(parts[0], 10) || 0;
-  const mem  = parseInt(parts[1], 10) || 0;
-  const up   = parts[2] || "—";
-  const batt = parseInt(parts[3], 10);
-  const chrg = parts[4] === "1";
+  const sampled = {
+    cpu: parseInt(parts[0], 10) || 0,
+    mem: parseInt(parts[1], 10) || 0,
+    up: parts[2] || "—",
+    batt: parseInt(parts[3], 10),
+    chrg: parts[4] === "1",
+  };
   const [ib, ob] = (parts[5] || "0/0").split("/").map(Number);
+  const now = Date.now();
+
+  // Network counters are sampled every second, while the rest of the HUD only
+  // adopts a fresh telemetry sample every three seconds.
+  if (!telemetry || now >= nextTelemetryAt) {
+    telemetry = sampled;
+    nextTelemetryAt = now + HUD_REFRESH_SECONDS * 1000;
+  }
+  const { cpu, mem, up, batt, chrg } = telemetry;
 
   let rate = "—";
   if (prev && ib >= prev.ib && ob >= prev.ob) {
-    rate = fmtRate((ib - prev.ib + ob - prev.ob) / 10);
+    const elapsedSeconds = Math.max((now - prev.at) / 1000, 0.001);
+    rate = fmtRate((ib - prev.ib + ob - prev.ob) / elapsedSeconds);
   }
-  prev = { ib, ob };
+  prev = { ib, ob, at: now };
 
   // Latched: the class is applied from the first real render onward and never
   // removed — re-renders keep the same DOM node so the animation does not replay.
