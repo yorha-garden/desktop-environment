@@ -7,11 +7,8 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-UB="$HOME/Library/Application Support/Übersicht/widgets/yorha"
 
 say() { printf '  %s\n' "$*"; }
-
-[ -d "$UB" ] && { cp "$UB"/*.jsx "$REPO/widgets/yorha/"; say "widgets  <- $UB"; }
 
 if [ -f "$HOME/.config/ghostty/config" ]; then
   cp "$HOME/.config/ghostty/config" "$REPO/config/ghostty/config"

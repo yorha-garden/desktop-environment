@@ -2,7 +2,7 @@
 # Turn YoRHA background helpers on or off.
 #   yorha-watcher on|off|status              every helper
 #   yorha-watcher on|off|status appearance   light/dark SketchyBar theme switcher
-#   yorha-watcher on|off|status ubersicht    Übersicht desktop widgets + its watchdog
+#   yorha-watcher on|off|status desktop      YoRHa Desktop (beam, ornaments, HUD, Pod)
 #   yorha-watcher on|off|status sketchybar   SketchyBar (brew service) + its minute clock
 # "off" also keeps a helper from starting at login; "on" re-enables and starts it.
 # Installed by deploy.sh to ~/.local/bin/yorha-watcher.
@@ -12,14 +12,13 @@ DOMAIN="gui/$(id -u)"
 AGENTS="$HOME/Library/LaunchAgents"
 
 APPEARANCE="com.yorha.appearance-watcher"
-WATCHDOG="com.yorha.ubersicht-watchdog"
+DESKTOP="com.yorha.desktop"
 MINUTE="com.yorha.sketchybar-minute"
-BUNDLE="tracesOf.Uebersicht"
 BREW="$(command -v brew || echo /opt/homebrew/bin/brew)"
 
 loaded() { launchctl print "$DOMAIN/$1" >/dev/null 2>&1; }
 disabled() { launchctl print-disabled "$DOMAIN" | grep -q "\"$1\" => disabled"; }
-app_running() { pgrep -f "bersicht.app/Contents/MacOS" >/dev/null; }
+desktop_running() { pgrep -f "\.config/yorha/bin/yorha-desktop" >/dev/null; }
 bar_running() { pgrep -x sketchybar >/dev/null; }
 
 wait_until() {
@@ -56,27 +55,23 @@ appearance_off() {
   wait_until bash -c "! launchctl print '$DOMAIN/$APPEARANCE' >/dev/null 2>&1"
 }
 
-# --- ubersicht ---------------------------------------------------------------
-ubersicht_status() {
-  local wd="ON" app="not running"
-  disabled "$WATCHDOG" && wd="OFF"
-  app_running && app="running"
-  echo "ubersicht: watchdog $wd, app $app"
+# --- desktop -----------------------------------------------------------------
+desktop_status() {
+  local agent="ON" app="not running"
+  disabled "$DESKTOP" && agent="OFF"
+  desktop_running && app="running"
+  echo "desktop: $agent, $app"
 }
 
-ubersicht_on() {
-  # No Login Item needed: the watchdog's RunAtLoad opens Übersicht at login.
-  agent_on "$WATCHDOG"
-  open -b "$BUNDLE"
-  wait_until app_running
+desktop_on() {
+  agent_on "$DESKTOP"
+  wait_until desktop_running
 }
 
-ubersicht_off() {
-  agent_off "$WATCHDOG"
-  osascript -e "quit app id \"$BUNDLE\"" 2>/dev/null || true
-  # In case Übersicht's own "launch at login" setting re-added it.
-  osascript -e 'tell application "System Events" to delete (every login item whose name is "Übersicht")' >/dev/null 2>&1 || true
-  wait_until bash -c '! pgrep -f "bersicht.app/Contents/MacOS" >/dev/null'
+desktop_off() {
+  # KeepAlive job: bootout is what stops it; disable keeps it off at login.
+  agent_off "$DESKTOP"
+  wait_until bash -c '! pgrep -f "\.config/yorha/bin/yorha-desktop" >/dev/null'
 }
 
 # --- sketchybar --------------------------------------------------------------
@@ -102,7 +97,7 @@ sketchybar_off() {
 }
 
 usage() {
-  echo "usage: yorha-watcher on|off|status [appearance|ubersicht|sketchybar]" >&2
+  echo "usage: yorha-watcher on|off|status [appearance|desktop|sketchybar]" >&2
   exit 64
 }
 
@@ -111,8 +106,8 @@ target="${2:-all}"
 case "$action" in on | off | status) ;; *) usage ;; esac
 case "$target" in
   # The bar starts first so the appearance watcher's first apply has a bar to colour.
-  all) targets="sketchybar ubersicht appearance" ;;
-  appearance | ubersicht | sketchybar) targets="$target" ;;
+  all) targets="sketchybar desktop appearance" ;;
+  appearance | desktop | sketchybar) targets="$target" ;;
   *) usage ;;
 esac
 

@@ -6,16 +6,10 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-UB="$HOME/Library/Application Support/Übersicht/widgets"
 
 say() { printf '  %s\n' "$*"; }
 
 say "repo: $REPO"
-
-# --- widgets ---------------------------------------------------------------
-mkdir -p "$UB/yorha"
-cp "$REPO"/widgets/yorha/*.jsx "$UB/yorha/"
-say "widgets  -> $UB/yorha/"
 
 # --- ghostty ---------------------------------------------------------------
 mkdir -p "$HOME/.config/ghostty/shaders"
@@ -267,29 +261,17 @@ launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null \
   && say "oracle   -> loaded (every 5 min)" \
   || say "oracle   -> plist written; load with: launchctl bootstrap gui/\$(id -u) $PLIST"
 
-# --- übersicht watchdog ----------------------------------------------------
-# Health-checking, not just liveness: the observed failure is the app staying
-# alive while its widget server dies. Also starts Übersicht at login.
-cp "$REPO/bin/ubersicht-watchdog.sh" "$HOME/.config/yorha/bin/ubersicht-watchdog.sh"
-chmod +x "$HOME/.config/yorha/bin/ubersicht-watchdog.sh"
-WPLIST="$HOME/Library/LaunchAgents/com.yorha.ubersicht-watchdog.plist"
-sed -e "s|REPO_PATH|$REPO|g" -e "s|HOME_PATH|$HOME|g" \
-    "$REPO/launchd/com.yorha.ubersicht-watchdog.plist" > "$WPLIST"
-launchctl bootout "gui/$(id -u)/com.yorha.ubersicht-watchdog" >/dev/null 2>&1 || true
-launchctl bootstrap "gui/$(id -u)" "$WPLIST" 2>/dev/null \
-  && say "watchdog -> loaded (health check every 60s, starts at login)" \
-  || say "watchdog -> plist written; load with: launchctl bootstrap gui/\$(id -u) $WPLIST"
+# --- native desktop layer --------------------------------------------------
+# YoRHa Desktop draws the beam, ornaments, HUD, and Pod in one native process and
+# replaces Übersicht, its widget server, and its watchdog.
+"$REPO/bin/install-desktop.sh" "$REPO/launchd/com.yorha.desktop.plist"
 
 # --- on/off switch -----------------------------------------------------------
-# One command to stop or resume SketchyBar, Übersicht, and the appearance watcher.
+# One command to stop or resume SketchyBar, YoRHa Desktop, and the appearance watcher.
 mkdir -p "$HOME/.local/bin"
 cp "$REPO/bin/yorha-watcher" "$HOME/.local/bin/yorha-watcher"
 chmod +x "$HOME/.local/bin/yorha-watcher"
 say "switch   -> ~/.local/bin/yorha-watcher (on|off|status)"
-
-# --- refresh ---------------------------------------------------------------
-osascript -e 'tell application id "tracesOf.Uebersicht" to refresh' >/dev/null 2>&1 \
-  && say "übersicht refreshed" || say "übersicht not running"
 
 echo
 say "Done. Reload Ghostty with Cmd+Shift+, to pick up shader/config changes."
