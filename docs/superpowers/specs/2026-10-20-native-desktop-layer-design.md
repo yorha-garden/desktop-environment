@@ -168,6 +168,37 @@ Findings while matching Übersicht:
 | CPU over 30 s | 0.09 s (≈0.3% of one core) |
 | Processes launched per second | 0 (hud.jsx: 10+) |
 
+## Phase 3 results (2026-10-20)
+
+The Pod panel keeps pod.jsx's contract: the oracle cache is used while it is under
+20 minutes old, non-empty, and well-formed; otherwise the six built-in reports show,
+with the same wording. One message every 30 s on a shared feed, which pauses while
+the displays sleep. The disk figure comes from `statfs` in `df -h` wording, and a
+test checks it against `df`.
+
+Deliberate differences from pod.jsx:
+
+- **No cursor.** The `▌` cursor never showed in Übersicht: its base opacity was 0 and
+  the blink keyframe also set 0. It is left out.
+- **Constant height.** The invisible cursor still took up space and wrapped onto a
+  second line whenever the message overflowed, and during every typewriter reveal,
+  so the panel jumped between one and two lines. The native panel is always one
+  message line tall (71.7 pt).
+- **Marquee distance is measured.** The scroll distance uses the rendered text width
+  instead of `length × 6.78px`.
+
+Window captures match Übersicht's width, border, corner brackets, header row, rule,
+and message baseline.
+
+### Final comparison (all four widgets)
+
+| Measure | YoRHa Desktop | Übersicht |
+|---|---|---|
+| RSS | ~21 MB | ~100 MB (app + Node + WebKit) |
+| Physical footprint | ~11 MB | — |
+| CPU over 60 s | 0.22 s (≈0.4% of one core) | plus 10+ process launches per second |
+| Processes | 1 | app, Node server, 3+ WebKit, watchdog |
+
 ## Out of scope
 
 - SketchyBar (already native) and its configuration.

@@ -45,6 +45,9 @@ struct Palette: Equatable {
     // beam.jsx: --yorha-beam-rgb / --yorha-beam-surface-rgb
     let beam: RGBA
     let beamSurface: RGBA
+    // pod.jsx: --yorha-pod-border / --yorha-pod-rule
+    let podBorder: RGBA
+    let podRule: RGBA
 
     static let light = Palette(
         field: RGBA(hex: 0xCAC5B0),
@@ -56,7 +59,9 @@ struct Palette: Equatable {
         accent: RGBA(hex: 0xBC9A5A),
         alert: RGBA(hex: 0xBB3B36),
         beam: RGBA(74, 71, 65),
-        beamSurface: RGBA(214, 210, 193)
+        beamSurface: RGBA(214, 210, 193),
+        podBorder: RGBA(74, 71, 65, 0.45),
+        podRule: RGBA(74, 71, 65, 0.3)
     )
 
     static let dark = Palette(
@@ -69,7 +74,9 @@ struct Palette: Equatable {
         accent: RGBA(hex: 0xBC9A5A),
         alert: RGBA(hex: 0xBB3B36),
         beam: RGBA(110, 123, 139),
-        beamSurface: RGBA(58, 58, 64)
+        beamSurface: RGBA(58, 58, 64),
+        podBorder: RGBA(110, 123, 139, 0.45),
+        podRule: RGBA(110, 123, 139, 0.3)
     )
 
     static func forMode(_ mode: Mode) -> Palette {

@@ -101,6 +101,50 @@ import AppKit
         precondition(HUDStyle.bootCurve == (0.34, 1.56, 0.64, 1))
         precondition(HUDStyle.networkInterval == 1 && HUDStyle.telemetryInterval == 3)
 
+        // Pod: `df -h` disk wording
+        let gi: UInt64 = 1 << 30
+        precondition(PodReports.human(bytes: 24 * gi) == "24Gi")
+        precondition(PodReports.human(bytes: 228 * gi) == "228Gi")
+        precondition(PodReports.human(bytes: gi * 34 / 10) == "3.4Gi")
+        precondition(PodReports.human(bytes: 512 << 20) == "512Mi")
+        precondition(PodReports.human(bytes: 1000 << 20) == "1.0Gi")
+        precondition(PodReports.human(bytes: 999) == "999B")
+
+        // Pod: built-in reports, unchanged wording
+        let low = PodReports.fallback(disk: "24Gi", mem: 85, battery: 7, onAC: false)
+        precondition(low.count == 6)
+        precondition(low[0] == "Proposal: system nominal. Continue operation.")
+        precondition(low[1] == "Disk reserve: 24Gi available.")
+        precondition(low[2] == "Warning: memory pressure 85%. Exceeds tolerance.")
+        precondition(low[3] == "Power reserve 7%.")
+        precondition(low[5] == "Analysis: operator condition stable. Recommendation: hydrate.")
+        let ok = PodReports.fallback(disk: "24Gi", mem: 40, battery: 90, onAC: true)
+        precondition(ok[2] == "Memory pressure 40%. Within tolerance.")
+        precondition(ok[3] == "Power reserve 90%. External supply connected.")
+
+        // Pod: oracle cache is used only while fresh (< 20 min), non-empty, well-formed
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        func cache(_ json: String) -> [String]? { PodReports.cached(json.data(using: .utf8), now: now) }
+        precondition(cache(#"{"generated": 1799998801, "messages": ["a", "b"]}"#) == ["a", "b"])
+        precondition(cache(#"{"generated": 1799998800, "messages": ["a"]}"#) == nil)   // exactly 20 min
+        precondition(cache(#"{"generated": 1799999999, "messages": []}"#) == nil)
+        precondition(cache(#"{"messages": ["a"]}"#) == nil)
+        precondition(cache("not json") == nil)
+        precondition(PodReports.cached(nil, now: now) == nil)
+
+        // Pod: marquee maths, panel box
+        precondition(PodStyle.marqueeOvershoot(textWidth: 427) == 127)
+        precondition(PodStyle.marqueeOvershoot(textWidth: 280) <= 0)
+        precondition(PodStyle.marqueeDuration(overshoot: 127) == 8.1)   // (3.2 + 127/26).toFixed(1)
+        precondition(PodStyle.typeSteps == 44 && PodStyle.typeDuration == 1.6)
+        precondition(PodStyle.cycleInterval == 30 && PodStyle.staleAfter == 1200)
+        precondition(near(PodStyle.size.width, 332))
+        // 1+13 + header 9 + 7 + rule 1 + 8 + 11*1.7 + 13+1, with Cascadia Code installed
+        if NSFont(name: HUDStyle.family, size: 8) != nil {
+            precondition(near(PodStyle.headerHeight, 9))
+            precondition(near(PodStyle.size.height, 71.7))
+        }
+
         // live sampler: plausible values from the kernel
         let live = TelemetrySampler().sample()
         precondition((0...100).contains(live.cpu) && (0...100).contains(live.mem))

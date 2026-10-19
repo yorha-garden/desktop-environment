@@ -7,6 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var appearanceObservation: NSKeyValueObservation?
     private var mode: Mode = .light
     private let clock = TelemetryClock()
+    private let pod = PodFeed()
 
     init(arguments: [String]) {
         if let i = arguments.firstIndex(of: "--appearance"), i + 1 < arguments.count {
@@ -41,10 +42,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.windows.forEach { $0.scene.update(telemetry, rate: rate) }
         }
         clock.start()
+
+        pod.onMessage = { [weak self] message, live in
+            self?.windows.forEach { $0.scene.show(podMessage: message, live: live) }
+        }
+        pod.start()
     }
 
-    @objc private func screensDidSleep() { clock.stop() }
-    @objc private func screensDidWake() { clock.start() }
+    @objc private func screensDidSleep() {
+        clock.stop()
+        pod.stop()
+    }
+
+    @objc private func screensDidWake() {
+        clock.start()
+        pod.start()
+    }
 
     private func currentMode() -> Mode {
         forcedMode ?? resolveMode(for: NSApp.effectiveAppearance)
@@ -71,6 +84,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         for screen in NSScreen.screens {
             let window = DesktopWindow(screen: screen, palette: palette, reduceMotion: reduceMotion)
+            if let current = pod.current {
+                window.scene.show(podMessage: current.message, live: current.live)
+            }
             window.orderFront(nil)
             windows.append(window)
         }
