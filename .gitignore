@@ -5,6 +5,9 @@ secrets/
 *.pem
 .env
 
+# Native build output (bin/build-desktop.sh)
+native/.build/
+
 # Runtime caches — machine state, not source
 cache/
 *.log
