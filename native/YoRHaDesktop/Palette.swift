@@ -19,6 +19,10 @@ struct RGBA: Equatable {
     var cgColor: CGColor {
         CGColor(srgbRed: r / 255, green: g / 255, blue: b / 255, alpha: a)
     }
+
+    var nsColor: NSColor {
+        NSColor(srgbRed: r / 255, green: g / 255, blue: b / 255, alpha: a)
+    }
 }
 
 enum Mode: String {

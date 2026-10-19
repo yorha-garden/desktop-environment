@@ -39,17 +39,24 @@ final class DesktopScene {
     let root = CALayer()
     private let beam: BeamWidget
     private let arcs: ArcsWidget
+    private let hud: HudWidget
 
     init(size: CGSize, scale: CGFloat, palette: Palette, reduceMotion: Bool) {
         root.isGeometryFlipped = true
         root.frame = CGRect(origin: .zero, size: size)
         root.contentsScale = scale
 
-        // Beam behind the ornaments; HUD and Pod will stack above both.
+        // Beam behind the ornaments, telemetry on top; the Pod will join the HUD.
         beam = BeamWidget(size: size, scale: scale, palette: palette, reduceMotion: reduceMotion)
         arcs = ArcsWidget(size: size, scale: scale, palette: palette, reduceMotion: reduceMotion)
+        hud = HudWidget(size: size, scale: scale, palette: palette, reduceMotion: reduceMotion)
         root.addSublayer(beam.layer)
         root.addSublayer(arcs.layer)
+        root.addSublayer(hud.layer)
+    }
+
+    func update(_ telemetry: Telemetry, rate: String) {
+        hud.update(telemetry, rate: rate)
     }
 
     func apply(_ palette: Palette, animated: Bool) {
@@ -62,6 +69,7 @@ final class DesktopScene {
         }
         beam.apply(palette)
         arcs.apply(palette)
+        hud.apply(palette)
         CATransaction.commit()
     }
 }

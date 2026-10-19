@@ -6,6 +6,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var windows: [DesktopWindow] = []
     private var appearanceObservation: NSKeyValueObservation?
     private var mode: Mode = .light
+    private let clock = TelemetryClock()
 
     init(arguments: [String]) {
         if let i = arguments.firstIndex(of: "--appearance"), i + 1 < arguments.count {
@@ -25,10 +26,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NotificationCenter.default.addObserver(
             self, selector: #selector(rebuild),
             name: NSApplication.didChangeScreenParametersNotification, object: nil)
-        NSWorkspace.shared.notificationCenter.addObserver(
+        let workspace = NSWorkspace.shared.notificationCenter
+        workspace.addObserver(
             self, selector: #selector(rebuild),
             name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
+        workspace.addObserver(
+            self, selector: #selector(screensDidSleep),
+            name: NSWorkspace.screensDidSleepNotification, object: nil)
+        workspace.addObserver(
+            self, selector: #selector(screensDidWake),
+            name: NSWorkspace.screensDidWakeNotification, object: nil)
+
+        clock.onTick = { [weak self] telemetry, rate in
+            self?.windows.forEach { $0.scene.update(telemetry, rate: rate) }
+        }
+        clock.start()
     }
+
+    @objc private func screensDidSleep() { clock.stop() }
+    @objc private func screensDidWake() { clock.start() }
 
     private func currentMode() -> Mode {
         forcedMode ?? resolveMode(for: NSApp.effectiveAppearance)
