@@ -122,7 +122,8 @@ class DeploymentContractTests(unittest.TestCase):
 
     def test_pipeline_does_not_target_ghostty(self):
         paths = [ROOT / "bin/apply-appearance.sh", ROOT / "bin/appearance-watcher.swift",
-                 ROOT / "launchd/com.yorha.appearance-watcher.plist", ROOT / "widgets/yorha/theme.jsx"]
+                 ROOT / "launchd/com.yorha.appearance-watcher.plist",
+                 ROOT / "native/YoRHaDesktop/Palette.swift"]
         self.assertNotIn("ghostty", "\n".join(p.read_text().lower() for p in paths))
 
     def test_watcher_and_coordinator_are_sketchybar_only(self):
@@ -138,10 +139,13 @@ class DeploymentContractTests(unittest.TestCase):
             check=True, text=True, capture_output=True,
         ).stdout.splitlines()
         tracked_names = {Path(path).name for path in tracked}
+        # Three feature-owned agents, plus SketchyBar's minute-boundary event, which
+        # is deployed alongside them but stays out of backup and restore.
         self.assertEqual(tracked_names, {
             "com.yorha.appearance-watcher.plist",
             "com.yorha.pod-oracle.plist",
-            "com.yorha.ubersicht-watchdog.plist",
+            "com.yorha.desktop.plist",
+            "com.yorha.sketchybar-minute.plist",
         })
 
         deploy_refs = set(re.findall(

@@ -1,3 +1,5 @@
+import os
+import plistlib
 import subprocess
 import tempfile
 import time
@@ -82,6 +84,59 @@ class DesktopTests(unittest.TestCase):
             self.assertLessEqual(abs(int(received) - rx), 50_000_000)
             self.assertLessEqual(abs(int(sent) - tx), 50_000_000)
             self.assertGreater(int(received), 0)
+
+    def test_launch_agent_runs_installed_binary_with_keepalive(self):
+        raw = (ROOT / "launchd" / "com.yorha.desktop.plist").read_bytes()
+        data = plistlib.loads(raw.replace(b"HOME_PATH", b"/Users/test"))
+        self.assertEqual(data["Label"], "com.yorha.desktop")
+        self.assertEqual(data["ProgramArguments"], ["/Users/test/.config/yorha/bin/yorha-desktop"])
+        self.assertTrue(data["RunAtLoad"] and data["KeepAlive"])
+        self.assertEqual(data["LimitLoadToSessionType"], "Aqua")
+        self.assertEqual(data["StandardErrorPath"], "/Users/test/.config/yorha/logs/yorha-desktop.log")
+
+    def install_sandbox(self, disabled=False):
+        sandbox = Path(tempfile.mkdtemp(dir=self.temp))
+        home, fake_bin, log = sandbox / "home with space", sandbox / "bin", sandbox / "calls.log"
+        home.mkdir()
+        fake_bin.mkdir()
+        old = home / "Library" / "LaunchAgents" / "com.yorha.ubersicht-watchdog.plist"
+        old.parent.mkdir(parents=True)
+        old.write_text("old")
+        disabled_line = '"com.yorha.desktop" => disabled' if disabled else ""
+        for name, body in {
+            "launchctl": f'echo "launchctl $*" >> "$CALLS"\n'
+                         f'[ "$1" = print-disabled ] && echo \'{disabled_line}\'\n'
+                         f'[ "$1" = print ] && exit 1\nexit 0\n',
+            "osascript": 'echo "osascript $*" >> "$CALLS"\nexit 0\n',
+        }.items():
+            (fake_bin / name).write_text("#!/bin/bash\n" + body)
+            (fake_bin / name).chmod(0o755)
+        env = {**os.environ, "HOME": str(home), "CALLS": str(log),
+               "PATH": f"{fake_bin}:{os.environ['PATH']}"}
+        result = subprocess.run([str(ROOT / "bin" / "install-desktop.sh")], env=env,
+                                capture_output=True, text=True, timeout=300)
+        return result, home, log.read_text() if log.exists() else ""
+
+    def test_installer_builds_installs_loads_and_retires_ubersicht(self):
+        result, home, calls = self.install_sandbox()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        binary = home / ".config/yorha/bin/yorha-desktop"
+        self.assertTrue(binary.exists() and os.access(binary, os.X_OK))
+        self.assertEqual(list(binary.parent.glob("*.tmp.*")), [])
+        plist = plistlib.loads((home / "Library/LaunchAgents/com.yorha.desktop.plist").read_bytes())
+        self.assertEqual(plist["ProgramArguments"], [str(binary)])
+        self.assertIn("launchctl bootstrap", calls)
+        self.assertIn("com.yorha.ubersicht-watchdog", calls)
+        self.assertFalse((home / "Library/LaunchAgents/com.yorha.ubersicht-watchdog.plist").exists())
+        self.assertIn('quit app id "tracesOf.Uebersicht"', calls)
+        self.assertIn("loaded", result.stdout)
+
+    def test_installer_leaves_a_switched_off_layer_unloaded(self):
+        result, home, calls = self.install_sandbox(disabled=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((home / ".config/yorha/bin/yorha-desktop").exists())
+        self.assertNotIn("launchctl bootstrap", calls)
+        self.assertIn("switched off", result.stdout)
 
     def test_build_script_compiles_optimized_app_without_warnings(self):
         binary = self.temp / "yorha-desktop"

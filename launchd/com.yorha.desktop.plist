@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.yorha.desktop</string>
+
+  <!-- Runs from ~/.config/yorha/bin, NOT the repo: launchd has no TCC access to
+       ~/Documents and would fail with "Operation not permitted". -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>HOME_PATH/.config/yorha/bin/yorha-desktop</string>
+  </array>
+
+  <!-- One process draws the whole desktop layer, so a plain KeepAlive is enough.
+       Übersicht needed a health-checking watchdog because its widget server could
+       die while the app stayed up; there is no such split state here. -->
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>LimitLoadToSessionType</key>
+  <string>Aqua</string>
+  <key>ProcessType</key>
+  <string>Interactive</string>
+
+  <key>StandardErrorPath</key>
+  <string>HOME_PATH/.config/yorha/logs/yorha-desktop.log</string>
+</dict>
+</plist>

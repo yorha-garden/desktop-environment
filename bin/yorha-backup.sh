@@ -266,6 +266,13 @@ else
   rm -f "$PLIST"
 fi
 
+echo "==> removing YoRHa Desktop"
+# Owned outright by the install, like the appearance watcher's runtime files.
+launchctl bootout "gui/$(id -u)/com.yorha.desktop" >/dev/null 2>&1 || true
+rm -f "$HOME/Library/LaunchAgents/com.yorha.desktop.plist"
+rm -f "$HOME/.config/yorha/bin/yorha-desktop"
+rm -f "$HOME/.config/yorha/logs/yorha-desktop.log"
+
 echo "==> reverting paths, per what actually existed at snapshot time"
 # Data-driven: never guess. ABSENT means the install created it -> delete.
 # PRESENT means it predates us -> restore the captured copy.

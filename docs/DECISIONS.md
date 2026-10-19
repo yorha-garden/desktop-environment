@@ -25,7 +25,7 @@ needs 16 slots, and that is a different concern from the UI palette.
 
 ## Automatic appearance: native ownership, narrow coordination
 
-The wallpaper, Übersicht layer, and SketchyBar follow the effective macOS Light or
+The wallpaper, YoRHa Desktop layer, and SketchyBar follow the effective macOS Light or
 Dark appearance. Ghostty remains permanently dark. Its files, shader, palette,
 process, and windows are intentionally outside the appearance system; matching
 some dark desktop colors to Ghostty is visual coordination, not runtime coupling.
@@ -81,8 +81,8 @@ system events, not polling intervals, and because wake needs an immediate repair
 opportunity. It observes `AppleInterfaceThemeChangedNotification`, coalesces a
 burst for 150 ms, handles wake and startup immediately, resolves the final
 effective mode, and invokes the installed coordinator with exactly `light` or
-`dark`. Keeping this responsibility out of SketchyBar and Übersicht gives one
-small, crash-recovered owner and avoids reloading either UI.
+`dark`. Keeping this responsibility out of SketchyBar and the desktop layer gives
+one small, crash-recovered owner and avoids reloading either UI.
 
 The executables live under `~/.config/yorha/bin` and output is directed to
 `~/.config/yorha/logs/appearance.log`. They cannot reliably run from this
@@ -90,9 +90,9 @@ TCC-protected repository under `~/Documents`, even when launchd successfully loa
 the plist.
 
 The committed feature owns exactly three feature-owned LaunchAgents: the Pod
-oracle, Übersicht watchdog, and appearance watcher. A SketchyBar minute-boundary
-agent may exist as separate user-owned work, but it is outside this feature's
-tracked deploy, backup, and restore contracts.
+oracle, YoRHa Desktop, and appearance watcher. The SketchyBar minute-boundary
+agent is deployed alongside them but belongs to the bar, and stays outside the
+backup and restore contracts.
 
 `apply-appearance.sh` owns only live SketchyBar fields: clock/date text, YoRHa
 wordmark, and crest path. It serializes calls with `appearance/apply.lock` and
@@ -101,14 +101,14 @@ Repeating that mode is a no-op unless `--force` is supplied. A failed update lea
 the prior marker untouched, so startup, wake, a manual reload, or the next system
 notification retries instead of falsely considering the mode applied.
 
-### CSS media query, no widget reload
+### Palette swapped in place, no widget reload
 
-Übersicht receives its palette through the render-only `theme.jsx` provider. Light
-tokens are declared on `:root`; `@media (prefers-color-scheme: dark)` overrides
-them with the dark palette. WebKit updates the variables in place, so module state,
-telemetry cadence, and animation progress survive an appearance transition. A
-reload would replay entrance effects and discard widget state, so neither the
-watcher nor the coordinator signals Übersicht.
+YoRHa Desktop observes `NSApp.effectiveAppearance` and swaps its palette inside one
+200 ms Core Animation transaction. The tokens are the ones Übersicht's `theme.jsx`
+declared with `@media (prefers-color-scheme: dark)`, carried over verbatim into
+`Palette.swift`. Layers, telemetry cadence, and animation progress survive an
+appearance transition. A rebuild would replay entrance effects, so neither the
+watcher nor the coordinator signals the desktop layer.
 
 ---
 
@@ -141,7 +141,42 @@ phosphor lift on lit rows, giving ~10/255 of real contrast.
 
 ---
 
-## Desktop layer: Übersicht
+## Desktop layer: YoRHa Desktop (native)
+
+Übersicht was replaced on 2026-10-20 by YoRHa Desktop, a Swift + Core Animation
+app in `native/YoRHaDesktop/` that draws the same four widgets in one process.
+Design and measurements: `docs/superpowers/specs/2026-10-20-native-desktop-layer-design.md`.
+
+**Why.** Measured with every widget running: Übersicht used ~100 MB across the app,
+its Node widget server, and WebKit, and `hud.jsx` launched 10+ processes every
+second (`ps`, `memory_pressure`, `uptime`, `pmset`, `netstat`, plus text tools).
+YoRHa Desktop uses ~21 MB, reads every value from the kernel, and spends ~0.4% of
+one core. The animations run on the render server as before; the savings are the
+runtime around them.
+
+**Swift, not Rust.** The work is AppKit and Core Animation calls, which Swift
+makes directly and Rust would make through `objc2` bindings. The repo already
+compiles Swift for the appearance watcher, so no second toolchain was added.
+
+**No watchdog.** Übersicht could lose its widget server while the app stayed up,
+which launchd could not see. One native process has no such split state, so
+`com.yorha.desktop` is a plain `KeepAlive` LaunchAgent.
+
+**Deliberate differences from the widgets:**
+
+- The layer sits at the desktop window level, below Finder's icons. Übersicht drew
+  above them.
+- The Pod has no cursor and a constant one-line height. The `▌` cursor never
+  rendered (opacity 0 in both base style and keyframe), yet it still wrapped onto a
+  second line and made the panel jump.
+- Reduced motion also stops the HUD boot-in and meter easing.
+- The Pod marquee distance uses the measured text width.
+
+---
+
+## Desktop layer: Übersicht (retired)
+
+Kept for the history; the widgets are in git history before the native layer.
 
 Four widgets: `hud` (corner telemetry), `pod` (Gemini messages), `ring` (reticle over
 the wallpaper's targeting array), `beam` (scan sweep).

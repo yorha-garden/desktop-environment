@@ -199,6 +199,23 @@ and message baseline.
 | CPU over 60 s | 0.22 s (≈0.4% of one core) | plus 10+ process launches per second |
 | Processes | 1 | app, Node server, 3+ WebKit, watchdog |
 
+## Phase 4 results (2026-10-20)
+
+- `com.yorha.desktop` LaunchAgent: `RunAtLoad`, plain `KeepAlive`, Aqua sessions only,
+  binary under `~/.config/yorha/bin`, log at `~/.config/yorha/logs/yorha-desktop.log`.
+- `bin/install-desktop.sh` builds beside the destination and swaps it in atomically,
+  loads the agent unless `yorha-watcher` switched it off, and retires Übersicht:
+  removes the watchdog agent and script, quits the app, and removes its login item.
+  The Übersicht app itself stays installed. `deploy.sh` calls the installer.
+- `yorha-watcher` swaps its `ubersicht` target for `desktop`.
+- Generated `restore.sh` scripts remove YoRHa Desktop. Older restore scripts predate
+  it; the README gives the manual steps.
+- Removed from the repo: `widgets/yorha/*.jsx`, the Übersicht watchdog script and
+  agent, and the widget theme test.
+- Verified on the build host: installed with `install-desktop.sh` alone (no full
+  deploy), relaunched by launchd ~2 s after `kill -9`, stayed off for 15 s under
+  `yorha-watcher off desktop`, and came back with `on`.
+
 ## Out of scope
 
 - SketchyBar (already native) and its configuration.
