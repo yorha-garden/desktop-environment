@@ -40,15 +40,12 @@ class DesktopTests(unittest.TestCase):
             'let t = TelemetrySampler().sample()\n'
             'let n = TelemetrySampler.networkBytes()\n'
             'print(t.mem, t.uptime, t.battery.map(String.init) ?? "none", t.onAC,\n'
-            '      n?.received ?? 0, n?.sent ?? 0, separator: "|")\n'
+            '      n?.received ?? 0, n?.sent ?? 0, PodReports.diskFree(), separator: "|")\n'
         )
         binary = probe_dir / "probe"
+        library = [str(s) for s in SOURCES if s.name != "main.swift"]
         subprocess.run(
-            ["swiftc", str(ROOT / "native" / "YoRHaDesktop" / "Telemetry.swift"),
-             str(ROOT / "native" / "YoRHaDesktop" / "Hud.swift"),
-             str(ROOT / "native" / "YoRHaDesktop" / "Palette.swift"),
-             str(ROOT / "native" / "YoRHaDesktop" / "TextLayer.swift"),
-             str(probe_dir / "main.swift"), "-o", str(binary)],
+            ["swiftc", *library, str(probe_dir / "main.swift"), "-o", str(binary)],
             check=True, capture_output=True, text=True,
         )
 
@@ -57,7 +54,7 @@ class DesktopTests(unittest.TestCase):
                                   text=True, check=True).stdout.strip()
 
         for attempt in range(3):   # a minute boundary between the two readings is a retry
-            mem, up, battery, on_ac, received, sent = subprocess.run(
+            mem, up, battery, on_ac, received, sent, disk = subprocess.run(
                 [str(binary)], capture_output=True, text=True, check=True).stdout.strip().split("|")
             shell_up = shell("uptime | awk -F'up ' '{print $2}' "
                              "| sed -E 's/, *[0-9]+ users?,.*//' | tr -s ' ' | sed 's/^ //'")
@@ -72,6 +69,13 @@ class DesktopTests(unittest.TestCase):
         percent = [w.rstrip("%;") for w in pm.split() if w.rstrip(";").endswith("%")]
         self.assertEqual(battery, percent[0] if percent else "none")
         self.assertEqual(on_ac == "true", "AC Power" in pm)
+
+        # Pod disk line: same unit as `df -h /`, value within normal disk churn
+        shell_disk = shell("df -h / | awk 'NR==2 {print $4}'")
+        unit = lambda s: s.lstrip("0123456789.")
+        number = lambda s: float(s[: len(s) - len(unit(s))])
+        self.assertEqual(unit(disk), unit(shell_disk))
+        self.assertLessEqual(abs(number(disk) - number(shell_disk)), max(1.0, number(shell_disk) * 0.05))
 
         rx, tx = map(int, shell("netstat -ib | awk '/en0.*Link/{i+=$7;o+=$10} END{print i, o}'").split())
         if rx or tx:
