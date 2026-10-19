@@ -32,6 +32,53 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("desktop tests passed", result.stdout)
 
+    def test_native_telemetry_matches_the_shell_tools_it_replaces(self):
+        probe_dir = self.temp / "probe"
+        probe_dir.mkdir(exist_ok=True)
+        (probe_dir / "main.swift").write_text(
+            'import Foundation\n'
+            'let t = TelemetrySampler().sample()\n'
+            'let n = TelemetrySampler.networkBytes()\n'
+            'print(t.mem, t.uptime, t.battery.map(String.init) ?? "none", t.onAC,\n'
+            '      n?.received ?? 0, n?.sent ?? 0, separator: "|")\n'
+        )
+        binary = probe_dir / "probe"
+        subprocess.run(
+            ["swiftc", str(ROOT / "native" / "YoRHaDesktop" / "Telemetry.swift"),
+             str(ROOT / "native" / "YoRHaDesktop" / "Hud.swift"),
+             str(ROOT / "native" / "YoRHaDesktop" / "Palette.swift"),
+             str(ROOT / "native" / "YoRHaDesktop" / "TextLayer.swift"),
+             str(probe_dir / "main.swift"), "-o", str(binary)],
+            check=True, capture_output=True, text=True,
+        )
+
+        def shell(command):
+            return subprocess.run(["/bin/bash", "-c", command], capture_output=True,
+                                  text=True, check=True).stdout.strip()
+
+        for attempt in range(3):   # a minute boundary between the two readings is a retry
+            mem, up, battery, on_ac, received, sent = subprocess.run(
+                [str(binary)], capture_output=True, text=True, check=True).stdout.strip().split("|")
+            shell_up = shell("uptime | awk -F'up ' '{print $2}' "
+                             "| sed -E 's/, *[0-9]+ users?,.*//' | tr -s ' ' | sed 's/^ //'")
+            if up == shell_up:
+                break
+        self.assertEqual(up, shell_up)
+
+        shell_mem = int(shell("memory_pressure | awk '/percentage/ {print 100-$5}' | tr -d '%'"))
+        self.assertLessEqual(abs(int(mem) - shell_mem), 5)
+
+        pm = shell("pmset -g batt")
+        percent = [w.rstrip("%;") for w in pm.split() if w.rstrip(";").endswith("%")]
+        self.assertEqual(battery, percent[0] if percent else "none")
+        self.assertEqual(on_ac == "true", "AC Power" in pm)
+
+        rx, tx = map(int, shell("netstat -ib | awk '/en0.*Link/{i+=$7;o+=$10} END{print i, o}'").split())
+        if rx or tx:
+            self.assertLessEqual(abs(int(received) - rx), 50_000_000)
+            self.assertLessEqual(abs(int(sent) - tx), 50_000_000)
+            self.assertGreater(int(received), 0)
+
     def test_build_script_compiles_optimized_app_without_warnings(self):
         binary = self.temp / "yorha-desktop"
         result = subprocess.run([str(BUILD), str(binary)], capture_output=True, text=True)

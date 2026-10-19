@@ -142,6 +142,32 @@ placement for both corners, the bottom-right overhang, and the beam band.
 Phase 1 replaces only the beam and ornaments, so the comparison is indicative. The
 real comparison comes after phase 3, when HUD and Pod are included.
 
+## Phase 2 results (2026-10-20)
+
+The HUD reads every value in-process (`Telemetry.swift`) and redraws on one shared
+1-second clock, which stops while the displays sleep. Tests compare each reading
+with the shell tool it replaces: `uptime` wording, `memory_pressure`, `pmset`, and
+`netstat -ib` en0 byte counters.
+
+Findings while matching Übersicht:
+
+- **Uptime rounds.** BSD `uptime` adds 30 s past the first minute, so it shows the
+  nearest minute; truncating was one minute behind.
+- **Text weight.** `CATextLayer` turns font smoothing off on a transparent window
+  and drew visibly thinner than WebKit. `TextLayer` draws with smoothing on and
+  matches the old weight.
+- **Layout.** Window captures match Übersicht's label, value, meter, and
+  right-aligned positions to the pixel, including CSS's trailing letter-spacing.
+- **Reduced motion** now also skips the HUD boot-in and meter easing. hud.jsx had
+  no reduced-motion rule.
+
+| Measure | YoRHa Desktop (beam + ornaments + HUD) |
+|---|---|
+| RSS | ~15 MB |
+| Physical footprint | ~10 MB |
+| CPU over 30 s | 0.09 s (≈0.3% of one core) |
+| Processes launched per second | 0 (hud.jsx: 10+) |
+
 ## Out of scope
 
 - SketchyBar (already native) and its configuration.
