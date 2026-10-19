@@ -31,6 +31,7 @@ to see exactly what changed on the machine.
 | `bin/pod-oracle.py` | Generates Pod messages via Gemini. Runs on a timer, never from the widget. |
 | `bin/deploy.sh` / `capture.sh` | Sync in each direction. |
 | `bin/yorha-backup.sh` | Snapshots every path the install touches and emits a tested `restore.sh`, including the prior appearance-watcher plist bytes and loaded state. |
+| `bin/yorha-watcher` | On/off switch for SketchyBar, Übersicht (+ watchdog), and the appearance watcher. Deployed to `~/.local/bin`. |
 | `bin/ubersicht-watchdog.sh` | Health-checks Übersicht every 60s and restarts it after 2 consecutive failures. Also starts it at login. |
 | `bin/apply-appearance.sh` | Idempotent SketchyBar coordinator: applies one validated palette/crest and records only successful modes. |
 | `bin/appearance-watcher.swift` | Native macOS appearance and wake observer, compiled by deployment into the runtime tree. |
@@ -190,6 +191,13 @@ login, which is what makes the desktop layer survive a reboot.
 Pause it with `touch ~/.config/yorha/cache/watchdog.off`, resume by removing that
 file. Without the flag, quitting Übersicht deliberately would just see it return
 within a minute.
+
+**To switch helpers off and keep them off across logins, use `yorha-watcher`.**
+`yorha-watcher off` stops SketchyBar (via `brew services`) and its minute clock,
+quits Übersicht and disables its watchdog, and disables the appearance watcher;
+`yorha-watcher on` reverses it. Name one helper to switch only that one:
+`yorha-watcher off sketchybar|ubersicht|appearance`. `yorha-watcher status` shows
+the current state. `deploy.sh` leaves a switched-off appearance watcher unloaded.
 
 **`sketchybar --animate … --bar y_offset` silently no-ops after a reload.** The rc
 once parked the bar at `y_offset=-36` and relied on the entrance animation to slide

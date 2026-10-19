@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+# Turn YoRHA background helpers on or off.
+#   yorha-watcher on|off|status              every helper
+#   yorha-watcher on|off|status appearance   light/dark SketchyBar theme switcher
+#   yorha-watcher on|off|status ubersicht    Übersicht desktop widgets + its watchdog
+#   yorha-watcher on|off|status sketchybar   SketchyBar (brew service) + its minute clock
+# "off" also keeps a helper from starting at login; "on" re-enables and starts it.
+# Installed by deploy.sh to ~/.local/bin/yorha-watcher.
+set -euo pipefail
+
+DOMAIN="gui/$(id -u)"
+AGENTS="$HOME/Library/LaunchAgents"
+
+APPEARANCE="com.yorha.appearance-watcher"
+WATCHDOG="com.yorha.ubersicht-watchdog"
+MINUTE="com.yorha.sketchybar-minute"
+BUNDLE="tracesOf.Uebersicht"
+BREW="$(command -v brew || echo /opt/homebrew/bin/brew)"
+
+loaded() { launchctl print "$DOMAIN/$1" >/dev/null 2>&1; }
+disabled() { launchctl print-disabled "$DOMAIN" | grep -q "\"$1\" => disabled"; }
+app_running() { pgrep -f "bersicht.app/Contents/MacOS" >/dev/null; }
+bar_running() { pgrep -x sketchybar >/dev/null; }
+
+wait_until() {
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    "$@" && return 0
+    sleep 0.5
+  done
+}
+
+# Agents are disabled before bootout so launchd also skips them at login.
+agent_on() {
+  launchctl enable "$DOMAIN/$1"
+  [ -f "$AGENTS/$1.plist" ] && launchctl bootstrap "$DOMAIN" "$AGENTS/$1.plist" 2>/dev/null || true
+}
+
+agent_off() {
+  launchctl disable "$DOMAIN/$1"
+  launchctl bootout "$DOMAIN/$1" 2>/dev/null || true
+}
+
+# --- appearance --------------------------------------------------------------
+appearance_status() {
+  if loaded "$APPEARANCE"; then echo "appearance: ON"; else echo "appearance: OFF"; fi
+}
+
+appearance_on() {
+  agent_on "$APPEARANCE"
+  loaded "$APPEARANCE" || launchctl kickstart -k "$DOMAIN/$APPEARANCE"
+}
+
+appearance_off() {
+  agent_off "$APPEARANCE"
+  # bootout returns before launchd finishes unloading; wait briefly.
+  wait_until bash -c "! launchctl print '$DOMAIN/$APPEARANCE' >/dev/null 2>&1"
+}
+
+# --- ubersicht ---------------------------------------------------------------
+ubersicht_status() {
+  local wd="ON" app="not running"
+  disabled "$WATCHDOG" && wd="OFF"
+  app_running && app="running"
+  echo "ubersicht: watchdog $wd, app $app"
+}
+
+ubersicht_on() {
+  # No Login Item needed: the watchdog's RunAtLoad opens Übersicht at login.
+  agent_on "$WATCHDOG"
+  open -b "$BUNDLE"
+  wait_until app_running
+}
+
+ubersicht_off() {
+  agent_off "$WATCHDOG"
+  osascript -e "quit app id \"$BUNDLE\"" 2>/dev/null || true
+  # In case Übersicht's own "launch at login" setting re-added it.
+  osascript -e 'tell application "System Events" to delete (every login item whose name is "Übersicht")' >/dev/null 2>&1 || true
+  wait_until bash -c '! pgrep -f "bersicht.app/Contents/MacOS" >/dev/null'
+}
+
+# --- sketchybar --------------------------------------------------------------
+sketchybar_status() {
+  local clock="ON" bar="not running"
+  disabled "$MINUTE" && clock="OFF"
+  bar_running && bar="running"
+  echo "sketchybar: bar $bar, minute clock $clock"
+}
+
+sketchybar_on() {
+  # brew services registers the bar to start at login as well.
+  "$BREW" services start sketchybar >/dev/null
+  wait_until bar_running
+  agent_on "$MINUTE"
+}
+
+sketchybar_off() {
+  agent_off "$MINUTE"
+  # brew services stop also removes its login LaunchAgent.
+  "$BREW" services stop sketchybar >/dev/null 2>&1 || true
+  wait_until bash -c '! pgrep -x sketchybar >/dev/null'
+}
+
+usage() {
+  echo "usage: yorha-watcher on|off|status [appearance|ubersicht|sketchybar]" >&2
+  exit 64
+}
+
+action="${1:-status}"
+target="${2:-all}"
+case "$action" in on | off | status) ;; *) usage ;; esac
+case "$target" in
+  # The bar starts first so the appearance watcher's first apply has a bar to colour.
+  all) targets="sketchybar ubersicht appearance" ;;
+  appearance | ubersicht | sketchybar) targets="$target" ;;
+  *) usage ;;
+esac
+
+for t in $targets; do
+  [ "$action" = status ] || "${t}_${action}"
+  "${t}_status"
+done

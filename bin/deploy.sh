@@ -216,7 +216,13 @@ cp "$REPO/launchd/com.yorha.appearance-watcher.plist" "$PLIST_TMP"
 mv "$PLIST_TMP" "$APPEARANCE_PLIST"
 PLIST_TMP=""
 launchctl bootout "gui/$(id -u)/com.yorha.appearance-watcher" >/dev/null 2>&1 || true
-launchctl bootstrap "gui/$(id -u)" "$APPEARANCE_PLIST"
+# Respect `yorha-watcher off appearance`: launchd refuses to bootstrap a disabled job.
+if launchctl print-disabled "gui/$(id -u)" 2>/dev/null \
+    | grep -q '"com.yorha.appearance-watcher" => disabled'; then
+  say "appearance -> watcher installed but switched off (yorha-watcher on appearance)"
+else
+  launchctl bootstrap "gui/$(id -u)" "$APPEARANCE_PLIST"
+fi
 if [ "$(defaults read -g AppleInterfaceStyle 2>/dev/null || true)" = Dark ]; then
   MODE=dark
 else
@@ -273,6 +279,13 @@ launchctl bootout "gui/$(id -u)/com.yorha.ubersicht-watchdog" >/dev/null 2>&1 ||
 launchctl bootstrap "gui/$(id -u)" "$WPLIST" 2>/dev/null \
   && say "watchdog -> loaded (health check every 60s, starts at login)" \
   || say "watchdog -> plist written; load with: launchctl bootstrap gui/\$(id -u) $WPLIST"
+
+# --- on/off switch -----------------------------------------------------------
+# One command to stop or resume SketchyBar, Übersicht, and the appearance watcher.
+mkdir -p "$HOME/.local/bin"
+cp "$REPO/bin/yorha-watcher" "$HOME/.local/bin/yorha-watcher"
+chmod +x "$HOME/.local/bin/yorha-watcher"
+say "switch   -> ~/.local/bin/yorha-watcher (on|off|status)"
 
 # --- refresh ---------------------------------------------------------------
 osascript -e 'tell application id "tracesOf.Uebersicht" to refresh' >/dev/null 2>&1 \
