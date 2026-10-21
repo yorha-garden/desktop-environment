@@ -17,21 +17,24 @@ final class DesktopWindow: NSWindow {
         hasShadow = false
         ignoresMouseEvents = true
         isReleasedWhenClosed = false
-
-        // Layer-hosting view. AppKit resets isGeometryFlipped on the view's own
-        // layer (measured: a flipped hosting layer still drew y-up), so the
-        // flipped scene root is a sublayer of a plain host layer instead.
-        let view = NSView(frame: NSRect(origin: .zero, size: screen.frame.size))
-        let host = CALayer()
-        view.layer = host
-        view.wantsLayer = true
-        host.frame = view.bounds
-        host.addSublayer(scene.root)
-        contentView = view
+        contentView = layerHostingView(size: screen.frame.size, root: scene.root)
     }
 
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
+}
+
+// Layer-hosting view. AppKit resets isGeometryFlipped on the view's own layer
+// (measured: a flipped hosting layer still drew y-up), so a flipped root goes in
+// as a sublayer of a plain host layer instead.
+func layerHostingView(size: CGSize, root: CALayer) -> NSView {
+    let view = NSView(frame: NSRect(origin: .zero, size: size))
+    let host = CALayer()
+    view.layer = host
+    view.wantsLayer = true
+    host.frame = view.bounds
+    host.addSublayer(root)
+    return view
 }
 
 // Everything drawn on one screen. Widgets are added here phase by phase.
@@ -63,18 +66,10 @@ final class DesktopScene {
         pod.show(message, live: live)
     }
 
-    func apply(_ palette: Palette, animated: Bool) {
-        CATransaction.begin()
-        if animated {
-            CATransaction.setAnimationDuration(Palette.transitionDuration)
-            CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeInEaseOut))
-        } else {
-            CATransaction.setDisableActions(true)
-        }
+    func apply(_ palette: Palette) {
         beam.apply(palette)
         arcs.apply(palette)
         hud.apply(palette)
         pod.apply(palette)
-        CATransaction.commit()
     }
 }

@@ -4,10 +4,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // `--appearance light|dark` pins the palette, for side-by-side visual checks.
     private let forcedMode: Mode?
     private var windows: [DesktopWindow] = []
+    private var bars: [BarWindow] = []
+    private var barEntered = false
     private var appearanceObservation: NSKeyValueObservation?
     private var mode: Mode = .light
     private let clock = TelemetryClock()
     private let pod = PodFeed()
+    private let minute = MinuteClock()
 
     init(arguments: [String]) {
         if let i = arguments.firstIndex(of: "--appearance"), i + 1 < arguments.count {
@@ -24,9 +27,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appearanceObservation = NSApp.observe(\.effectiveAppearance) { [weak self] _, _ in
             DispatchQueue.main.async { self?.appearanceDidChange() }
         }
-        NotificationCenter.default.addObserver(
+        let center = NotificationCenter.default
+        center.addObserver(
             self, selector: #selector(rebuild),
             name: NSApplication.didChangeScreenParametersNotification, object: nil)
+        center.addObserver(
+            self, selector: #selector(clockDidChange),
+            name: .NSSystemClockDidChange, object: nil)
+        center.addObserver(
+            self, selector: #selector(clockDidChange),
+            name: .NSSystemTimeZoneDidChange, object: nil)
         let workspace = NSWorkspace.shared.notificationCenter
         workspace.addObserver(
             self, selector: #selector(rebuild),
@@ -47,16 +57,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.windows.forEach { $0.scene.show(podMessage: message, live: live) }
         }
         pod.start()
+
+        minute.onTick = { [weak self] now in
+            self?.bars.forEach { $0.bar.show(now) }
+        }
+        minute.start()
     }
 
     @objc private func screensDidSleep() {
         clock.stop()
         pod.stop()
+        minute.stop()
     }
 
     @objc private func screensDidWake() {
         clock.start()
         pod.start()
+        minute.start()
+    }
+
+    @objc private func clockDidChange() {
+        NSTimeZone.resetSystemTimeZone()
+        minute.refresh()
     }
 
     private func currentMode() -> Mode {
@@ -68,14 +90,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard next != mode else { return }
         mode = next
         let palette = Palette.forMode(mode)
-        windows.forEach { $0.scene.apply(palette, animated: true) }
+        Palette.transition(animated: true) {
+            windows.forEach { $0.scene.apply(palette) }
+            bars.forEach { $0.bar.apply(palette) }
+        }
     }
 
-    // Screens changed or reduced motion toggled: start over. Entrance animations
-    // replay, which matches Übersicht reloading its widgets in the same cases.
+    // Screens changed or reduced motion toggled: start over. Desktop entrance
+    // animations replay, which matches Übersicht reloading its widgets in the same
+    // cases. The bar slides in only once per launch, as SketchyBar did once per boot.
     @objc private func rebuild() {
-        windows.forEach { $0.orderOut(nil) }
+        (windows as [NSWindow] + bars).forEach { $0.orderOut(nil) }
         windows.removeAll()
+        bars.removeAll()
         buildWindows()
     }
 
@@ -89,6 +116,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             window.orderFront(nil)
             windows.append(window)
+
+            let bar = BarWindow(screen: screen, palette: palette, reduceMotion: reduceMotion,
+                                entrance: !barEntered)
+            bar.bar.show(Date())
+            bar.orderFront(nil)
+            bars.append(bar)
         }
+        barEntered = true
     }
 }

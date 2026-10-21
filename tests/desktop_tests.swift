@@ -145,6 +145,68 @@ import AppKit
             precondition(near(PodStyle.size.height, 71.7))
         }
 
+        // Bar: sketchybarrc colours. Text follows the palette; BRAND is the wordmark.
+        precondition(Palette.light.wordmark == RGBA(hex: 0x4A4741) && Palette.light.text == RGBA(hex: 0x4A4741))
+        precondition(Palette.dark.wordmark == RGBA(hex: 0xBC9A5A) && Palette.dark.text == RGBA(hex: 0xD8D4C4))
+
+        // Bar: sketchybarrc geometry and entrance
+        precondition(BarStyle.height == 32 && BarStyle.side == 12 && BarStyle.itemPadding == 6)
+        precondition(BarStyle.crestSlot == 22 && BarStyle.crestSize == CGSize(width: 15.5, height: 18))
+        precondition(BarStyle.entranceOffset == -36 && BarStyle.entranceDuration == 0.5)
+        precondition(BarStyle.entranceCurve == (0.61, 1, 0.88, 1))
+        // item boxes as `sketchybar --query` reported them on a 1710 pt screen
+        precondition(BarStyle.layout(screenWidth: 1710, date: 66, clock: 33)
+            == BarLayout(crest: 12, wordmark: 34, date: 1581, clock: 1659))
+        if NSFont(name: HUDStyle.family, size: 11) != nil {
+            let regular = BarStyle.font(bold: false), bold = BarStyle.font(bold: true)
+            precondition(regular.fontName == "CascadiaCode-Regular" && bold.fontName == "CascadiaCode-Bold")
+            func width(_ s: String, _ font: NSFont) -> CGFloat {
+                BarStyle.labelWidth(NSAttributedString(string: s, attributes: [.font: font]))
+            }
+            precondition(width("YoRHa", bold) == 34)
+            precondition(width("07.14", regular) == 33 && width("WED 21 OCT", regular) == 66)
+            precondition(BarStyle.baseline(regular) == 20 && BarStyle.baseline(bold) == 20)
+        }
+
+        // Bar: `date` wording, independent of the system locale
+        let utc = TimeZone(identifier: "UTC")!
+        let morning = Date(timeIntervalSince1970: 1_792_566_840)   // 2026-10-21 07:14 UTC
+        precondition(BarFormat.clock(morning, timeZone: utc) == "07.14")
+        precondition(BarFormat.day(morning, timeZone: utc) == "WED 21 OCT")
+        let jakarta = TimeZone(identifier: "Asia/Jakarta")!
+        precondition(BarFormat.clock(morning, timeZone: jakarta) == "14.14")
+        let firstOfMarch = Date(timeIntervalSince1970: 1_803_859_200)   // 2027-03-01 00:00 UTC
+        precondition(BarFormat.clock(firstOfMarch, timeZone: utc) == "00.00")
+        precondition(BarFormat.day(firstOfMarch, timeZone: utc) == "MON 01 MAR")
+
+        // Bar: the next wall-clock minute, never the current one
+        let boundary = Date(timeIntervalSince1970: 1_800_000_000)
+        precondition(BarFormat.nextMinute(after: boundary).timeIntervalSince1970 == 1_800_000_060)
+        precondition(BarFormat.nextMinute(after: boundary + 0.5).timeIntervalSince1970 == 1_800_000_060)
+        precondition(BarFormat.nextMinute(after: boundary - 0.001).timeIntervalSince1970 == 1_800_000_000)
+
+        // Bar: embedded crest decodes at its 31x36 px size
+        precondition(BarCrest.image?.width == 31 && BarCrest.image?.height == 36)
+        // With the repo path: both installed crests share the embedded alpha, and the
+        // dark one is the plain #BC9A5A tint the bar paints through it.
+        if CommandLine.arguments.count > 1 {
+            let assets = URL(fileURLWithPath: CommandLine.arguments[1]).appendingPathComponent("assets")
+            func pixels(_ data: Data) -> [[Int]] {
+                let rep = NSBitmapImageRep(data: data)!
+                return (0..<rep.pixelsHigh).flatMap { y in (0..<rep.pixelsWide).map { x in
+                    var px = [Int](repeating: 0, count: 4)
+                    rep.getPixel(&px, atX: x, y: y)
+                    return px
+                } }
+            }
+            let mask = pixels(BarCrest.png)
+            for name in ["yorha-icon-light.png", "yorha-icon-dark.png"] {
+                let asset = pixels(try! Data(contentsOf: assets.appendingPathComponent(name)))
+                precondition(asset.map { $0[3] } == mask.map { $0[3] }, "\(name) alpha differs")
+            }
+            precondition(mask.filter { $0[3] > 0 }.allSatisfy { $0[0..<3] == [0xBC, 0x9A, 0x5A] })
+        }
+
         // live sampler: plausible values from the kernel
         let live = TelemetrySampler().sample()
         precondition((0...100).contains(live.cpu) && (0...100).contains(live.mem))
