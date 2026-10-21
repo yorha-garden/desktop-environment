@@ -67,16 +67,6 @@ osascript -e 'tell application "System Events" to get picture of current desktop
 # --- 6. services and login agents ------------------------------------------
 { brew services list 2>/dev/null || true; } > "$DEST/services.txt"
 { ls -1 "$HOME/Library/LaunchAgents" 2>/dev/null || true; } > "$DEST/launchagents.txt"
-APPEARANCE_LABEL=com.yorha.appearance-watcher
-APPEARANCE_PLIST="$HOME/Library/LaunchAgents/$APPEARANCE_LABEL.plist"
-if [ -f "$APPEARANCE_PLIST" ]; then
-  cp "$APPEARANCE_PLIST" "$DEST/appearance-watcher.plist.original"
-fi
-if launchctl print "gui/$(id -u)/$APPEARANCE_LABEL" >/dev/null 2>&1; then
-  printf 'loaded\n' > "$DEST/appearance-watcher.loaded-state"
-else
-  printf 'unloaded\n' > "$DEST/appearance-watcher.loaded-state"
-fi
 # Login items, one per line. Restore removes only the ones absent at snapshot time.
 { osascript -e 'tell application "System Events" to get name of every login item' 2>/dev/null \
     | tr ',' '\n' | sed 's/^ *//;s/ *$//' || true; } > "$DEST/loginitems.txt"
@@ -96,31 +86,6 @@ cat > "$DEST/restore.sh" <<'RESTORE'
 # Return this Mac to the state captured in this snapshot.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LABEL=com.yorha.appearance-watcher
-PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
-PLIST_STATE_FILE="$HERE/appearance-watcher.loaded-state"
-RESTORE_PLIST_TMP=""
-
-cleanup_restore_temp() {
-  [ -z "$RESTORE_PLIST_TMP" ] || rm -f -- "$RESTORE_PLIST_TMP"
-}
-trap cleanup_restore_temp EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
-
-if [ ! -f "$PLIST_STATE_FILE" ]; then
-  echo "error: invalid appearance watcher state: missing $PLIST_STATE_FILE" >&2
-  exit 65
-fi
-if cmp -s "$PLIST_STATE_FILE" <(printf 'loaded\n'); then
-  ORIGINAL_APPEARANCE_STATE=loaded
-elif cmp -s "$PLIST_STATE_FILE" <(printf 'unloaded\n'); then
-  ORIGINAL_APPEARANCE_STATE=unloaded
-else
-  echo "error: invalid appearance watcher state in $PLIST_STATE_FILE" >&2
-  exit 65
-fi
 
 PREEXISTING_FILE="$HERE/preexisting.txt"
 PREEXISTING_COUNT=0
@@ -136,8 +101,8 @@ invalid_preexisting_metadata() {
   exit 65
 }
 
-# Parse the complete metadata contract into fixed state slots before staging a
-# plist or touching a service, wallpaper, or destination path. Restore never
+# Parse the complete metadata contract into fixed state slots before touching a
+# service, wallpaper, or destination path. Restore never
 # re-reads the file, so a later replacement cannot smuggle in an unchecked path.
 [ -f "$PREEXISTING_FILE" ] || invalid_preexisting_metadata
 PREEXISTING_LAST_BYTE="$(tail -c 1 "$PREEXISTING_FILE" 2>/dev/null \
@@ -185,19 +150,6 @@ while IFS= read -r PREEXISTING_ROW || [ -n "$PREEXISTING_ROW" ]; do
 done < "$PREEXISTING_FILE"
 [ "$PREEXISTING_COUNT" -eq 20 ] || invalid_preexisting_metadata
 
-# Stage the complete original bytes beside the destination before changing any
-# live state. A partial or failed copy is removed by the EXIT/signal cleanup.
-if [ -f "$HERE/appearance-watcher.plist.original" ]; then
-  RESTORE_PLIST_TMP="$PLIST.restore.$$"
-  if cp "$HERE/appearance-watcher.plist.original" "$RESTORE_PLIST_TMP"; then
-    :
-  else
-    RESTORE_STATUS=$?
-    echo "error: could not stage the original $LABEL plist" >&2
-    exit "$RESTORE_STATUS"
-  fi
-fi
-
 echo "==> stopping services this install started"
 # Must happen BEFORE deleting configs: killing the config does not kill the daemon,
 # and a KeepAlive LaunchAgent relaunches at every login otherwise.
@@ -238,40 +190,26 @@ else
   rm -f "$APPSUP"
 fi
 
-echo "==> restoring appearance watcher"
-launchctl bootout "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || true
-rm -f "$HOME/.config/yorha/bin/yorha-appearance-watcher"
-rm -f "$HOME/.config/yorha/bin/apply-appearance.sh"
-rm -f "$HOME/.config/yorha/logs/appearance.log"
-rm -rf "$HOME/.config/yorha/appearance"
-
-if [ -f "$HERE/appearance-watcher.plist.original" ]; then
-  if mv "$RESTORE_PLIST_TMP" "$PLIST"; then
-    RESTORE_PLIST_TMP=""
-  else
-    RESTORE_STATUS=$?
-    echo "error: could not install the original $LABEL plist" >&2
-    exit "$RESTORE_STATUS"
-  fi
-  if [ "$ORIGINAL_APPEARANCE_STATE" = loaded ]; then
-    if launchctl bootstrap "gui/$(id -u)" "$PLIST"; then
-      :
-    else
-      RESTORE_STATUS=$?
-      echo "error: could not restore pre-existing $LABEL job" >&2
-      exit "$RESTORE_STATUS"
-    fi
-  fi
-else
-  rm -f "$PLIST"
-fi
-
-echo "==> removing YoRHa Desktop"
-# Owned outright by the install, like the appearance watcher's runtime files.
+echo "==> removing YoRHa Desktop and the wallpaper runtime"
+# Owned outright by the install. The bar-off marker is yorha-watcher's switch.
 launchctl bootout "gui/$(id -u)/com.yorha.desktop" >/dev/null 2>&1 || true
 rm -f "$HOME/Library/LaunchAgents/com.yorha.desktop.plist"
 rm -f "$HOME/.config/yorha/bin/yorha-desktop"
 rm -f "$HOME/.config/yorha/logs/yorha-desktop.log"
+rm -f "$HOME/.config/yorha/bar-off"
+rm -rf "$HOME/.config/yorha/appearance"
+
+echo "==> removing retired helpers"
+# SketchyBar's minute trigger and the appearance watcher. Installs since the native
+# bar no longer create them; this clears what an older install left behind.
+for agent in com.yorha.sketchybar-minute com.yorha.appearance-watcher; do
+  launchctl bootout "gui/$(id -u)/$agent" >/dev/null 2>&1 || true
+  rm -f "$HOME/Library/LaunchAgents/$agent.plist"
+done
+rm -f "$HOME/.config/yorha/bin/yorha-appearance-watcher"
+rm -f "$HOME/.config/yorha/bin/apply-appearance.sh"
+rm -f "$HOME/.config/yorha/logs/appearance.log"
+rm -f "$HOME/.config/yorha/cache/sketchybar-minute.stderr.log"
 
 echo "==> reverting paths, per what actually existed at snapshot time"
 # Data-driven: never guess. ABSENT means the install created it -> delete.

@@ -26,55 +26,14 @@ else
   say "ghostty  -> ~/.config/ghostty"
 fi
 
-# --- sketchybar ------------------------------------------------------------
-mkdir -p "$HOME/.config/sketchybar"
-cp "$REPO/config/sketchybar/sketchybarrc" "$HOME/.config/sketchybar/sketchybarrc"
-chmod +x "$HOME/.config/sketchybar/sketchybarrc"
-# The crest PNG must live outside the repo: sketchybar is a launchd service and
-# ~/Documents is TCC-protected — same constraint as the oracle below.
-[ -f "$REPO/assets/yorha-icon.png" ] && cp "$REPO/assets/yorha-icon.png" "$HOME/.config/sketchybar/yorha-icon.png"
-command -v sketchybar >/dev/null && sketchybar --reload >/dev/null 2>&1 || true
-say "sketchybar -> ~/.config/sketchybar/ (rc + crest, reloaded)"
-
-# Drive the clock from macOS wall-clock minute boundaries instead of a relative
-# SketchyBar poll, which drifts according to the bar's startup phase.
-SB_BIN="$(command -v sketchybar || true)"
-if [ -n "$SB_BIN" ]; then
-  mkdir -p "$HOME/Library/LaunchAgents" "$HOME/.config/yorha/cache"
-  SBPLIST="$HOME/Library/LaunchAgents/com.yorha.sketchybar-minute.plist"
-  sed -e "s|SKETCHYBAR_PATH|$SB_BIN|g" -e "s|HOME_PATH|$HOME|g" \
-      "$REPO/launchd/com.yorha.sketchybar-minute.plist" > "$SBPLIST"
-  launchctl bootout "gui/$(id -u)/com.yorha.sketchybar-minute" >/dev/null 2>&1 || true
-  launchctl bootstrap "gui/$(id -u)" "$SBPLIST" 2>/dev/null \
-    && say "clock     -> loaded (system minute boundaries)" \
-    || say "clock     -> plist written; load with: launchctl bootstrap gui/\$(id -u) $SBPLIST"
-fi
-
 # --- appearance runtime BEGIN
-APPEARANCE_SKETCHYBAR_BIN="${SB_BIN:-}"
-if [ -z "$APPEARANCE_SKETCHYBAR_BIN" ]; then
-  APPEARANCE_SKETCHYBAR_BIN="$(command -v sketchybar || true)"
-fi
-case "$APPEARANCE_SKETCHYBAR_BIN" in
-  /*) ;;
-  *)
-    echo "missing SketchyBar executable; install SketchyBar and rerun deploy" >&2
-    exit 69
-    ;;
-esac
-if [ ! -x "$APPEARANCE_SKETCHYBAR_BIN" ]; then
-  echo "missing SketchyBar executable: $APPEARANCE_SKETCHYBAR_BIN" >&2
-  exit 69
-fi
-
+# The dynamic HEIC is the only appearance runtime left: macOS picks its frame, and
+# YoRHa Desktop recolours the widgets and bar itself. The block guards its one
+# pending temp with traps that hand back whatever traps the caller had set.
 APPEARANCE="$HOME/.config/yorha/appearance"
-YORHA_BIN="$HOME/.config/yorha/bin"
-mkdir -p "$APPEARANCE" "$YORHA_BIN" "$HOME/.config/yorha/logs" \
-  "$HOME/Library/LaunchAgents"
+mkdir -p "$APPEARANCE"
 
 INSTALL_TMP=""
-WATCHER_TMP=""
-PLIST_TMP=""
 PRIOR_EXIT_TRAP="$(trap -p EXIT)"
 PRIOR_HUP_TRAP="$(trap -p HUP)"
 PRIOR_INT_TRAP="$(trap -p INT)"
@@ -98,11 +57,7 @@ PRIOR_INT_HANDLER="$(extract_appearance_trap_handler "$PRIOR_INT_TRAP")"
 PRIOR_TERM_HANDLER="$(extract_appearance_trap_handler "$PRIOR_TERM_TRAP")"
 
 cleanup_appearance_temps() {
-  local YORHA_APPEARANCE_CLEANUP_PENDING
-  for YORHA_APPEARANCE_CLEANUP_PENDING in "$INSTALL_TMP" "$WATCHER_TMP" "$PLIST_TMP"; do
-    [ -z "$YORHA_APPEARANCE_CLEANUP_PENDING" ] \
-      || rm -f -- "$YORHA_APPEARANCE_CLEANUP_PENDING"
-  done
+  [ -z "$INSTALL_TMP" ] || rm -f -- "$INSTALL_TMP"
 }
 
 restore_appearance_trap() {
@@ -168,63 +123,21 @@ install_atomic() {
   YORHA_APPEARANCE_INSTALL_TEMPORARY="${YORHA_APPEARANCE_INSTALL_DESTINATION}.tmp.$$"
   INSTALL_TMP="$YORHA_APPEARANCE_INSTALL_TEMPORARY"
   cp "$YORHA_APPEARANCE_INSTALL_SOURCE" "$YORHA_APPEARANCE_INSTALL_TEMPORARY"
-  if [ "${3:-}" = executable ]; then
-    chmod +x "$YORHA_APPEARANCE_INSTALL_TEMPORARY"
-  fi
   mv "$YORHA_APPEARANCE_INSTALL_TEMPORARY" "$YORHA_APPEARANCE_INSTALL_DESTINATION"
   INSTALL_TMP=""
 }
 
 "$REPO/bin/make-wallpaper.sh" --verify
 RUNTIME_WALLPAPER="$APPEARANCE/yorha-system.heic"
-RUNTIME_COORDINATOR="$YORHA_BIN/apply-appearance.sh"
-RUNTIME_WATCHER="$YORHA_BIN/yorha-appearance-watcher"
 install_atomic "$REPO/assets/yorha-system.heic" "$RUNTIME_WALLPAPER"
-install_atomic "$REPO/assets/yorha-icon-light.png" "$APPEARANCE/yorha-icon-light.png"
-install_atomic "$REPO/assets/yorha-icon-dark.png" "$APPEARANCE/yorha-icon-dark.png"
-install_atomic "$REPO/bin/apply-appearance.sh" "$RUNTIME_COORDINATOR" executable
-
-WATCHER_TMP="$RUNTIME_WATCHER.tmp.$$"
-swiftc -O "$REPO/bin/appearance-watcher.swift" -o "$WATCHER_TMP"
-chmod +x "$WATCHER_TMP"
-mv "$WATCHER_TMP" "$RUNTIME_WATCHER"
-WATCHER_TMP=""
 
 osascript - "$RUNTIME_WALLPAPER" <<'AS'
 on run argv
   tell application "System Events" to set picture of every desktop to POSIX file (item 1 of argv)
 end run
 AS
+say "wallpaper -> ~/.config/yorha/appearance/yorha-system.heic (assigned once)"
 
-APPEARANCE_PLIST="$HOME/Library/LaunchAgents/com.yorha.appearance-watcher.plist"
-PLIST_TMP="$APPEARANCE_PLIST.tmp.$$"
-PLUTIL="${YORHA_PLUTIL:-/usr/bin/plutil}"
-cp "$REPO/launchd/com.yorha.appearance-watcher.plist" "$PLIST_TMP"
-"$PLUTIL" -replace ProgramArguments -array -- "$PLIST_TMP"
-"$PLUTIL" -insert ProgramArguments.0 -string "$RUNTIME_WATCHER" -- "$PLIST_TMP"
-"$PLUTIL" -insert ProgramArguments.1 -string "$RUNTIME_COORDINATOR" -- "$PLIST_TMP"
-"$PLUTIL" -replace EnvironmentVariables.YORHA_SKETCHYBAR_BIN -string "$APPEARANCE_SKETCHYBAR_BIN" -- "$PLIST_TMP"
-"$PLUTIL" -replace StandardOutPath -string "$HOME/.config/yorha/logs/appearance.log" -- "$PLIST_TMP"
-"$PLUTIL" -replace StandardErrorPath -string "$HOME/.config/yorha/logs/appearance.log" -- "$PLIST_TMP"
-"$PLUTIL" -lint "$PLIST_TMP"
-mv "$PLIST_TMP" "$APPEARANCE_PLIST"
-PLIST_TMP=""
-launchctl bootout "gui/$(id -u)/com.yorha.appearance-watcher" >/dev/null 2>&1 || true
-# Respect `yorha-watcher off appearance`: launchd refuses to bootstrap a disabled job.
-if launchctl print-disabled "gui/$(id -u)" 2>/dev/null \
-    | grep -q '"com.yorha.appearance-watcher" => disabled'; then
-  say "appearance -> watcher installed but switched off (yorha-watcher on appearance)"
-else
-  launchctl bootstrap "gui/$(id -u)" "$APPEARANCE_PLIST"
-fi
-if [ "$(defaults read -g AppleInterfaceStyle 2>/dev/null || true)" = Dark ]; then
-  MODE=dark
-else
-  MODE=light
-fi
-YORHA_SKETCHYBAR_BIN="$APPEARANCE_SKETCHYBAR_BIN" \
-  "$RUNTIME_COORDINATOR" "$MODE" --force \
-  || say "appearance -> watcher installed; SketchyBar update will retry"
 restore_appearance_traps
 # --- appearance runtime END
 
@@ -262,12 +175,13 @@ launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null \
   || say "oracle   -> plist written; load with: launchctl bootstrap gui/\$(id -u) $PLIST"
 
 # --- native desktop layer --------------------------------------------------
-# YoRHa Desktop draws the beam, ornaments, HUD, and Pod in one native process and
-# replaces Übersicht, its widget server, and its watchdog.
+# YoRHa Desktop draws the beam, ornaments, HUD, Pod, and bar in one native process.
+# It replaces Übersicht, its widget server, and its watchdog, and SketchyBar with
+# its minute trigger and appearance watcher; the installer retires all of them.
 "$REPO/bin/install-desktop.sh" "$REPO/launchd/com.yorha.desktop.plist"
 
 # --- on/off switch -----------------------------------------------------------
-# One command to stop or resume SketchyBar, YoRHa Desktop, and the appearance watcher.
+# One command to stop or resume YoRHa Desktop, or only its bar.
 mkdir -p "$HOME/.local/bin"
 cp "$REPO/bin/yorha-watcher" "$HOME/.local/bin/yorha-watcher"
 chmod +x "$HOME/.local/bin/yorha-watcher"

@@ -6,6 +6,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var windows: [DesktopWindow] = []
     private var bars: [BarWindow] = []
     private var barEntered = false
+    private let barOn = BarSwitch.isOn()
     private var appearanceObservation: NSKeyValueObservation?
     private var mode: Mode = .light
     private let clock = TelemetryClock()
@@ -61,7 +62,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         minute.onTick = { [weak self] now in
             self?.bars.forEach { $0.bar.show(now) }
         }
-        minute.start()
+        if barOn { minute.start() }
     }
 
     @objc private func screensDidSleep() {
@@ -73,7 +74,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func screensDidWake() {
         clock.start()
         pod.start()
-        minute.start()
+        if barOn { minute.start() }
     }
 
     @objc private func clockDidChange() {
@@ -117,6 +118,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.orderFront(nil)
             windows.append(window)
 
+            guard barOn else { continue }
             let bar = BarWindow(screen: screen, palette: palette, reduceMotion: reduceMotion,
                                 entrance: !barEntered)
             bar.bar.show(Date())

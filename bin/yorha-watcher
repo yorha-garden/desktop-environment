@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # Turn YoRHA background helpers on or off.
 #   yorha-watcher on|off|status              every helper
-#   yorha-watcher on|off|status appearance   light/dark SketchyBar theme switcher
-#   yorha-watcher on|off|status desktop      YoRHa Desktop (beam, ornaments, HUD, Pod)
-#   yorha-watcher on|off|status sketchybar   SketchyBar (brew service) + its minute clock
+#   yorha-watcher on|off|status desktop      YoRHa Desktop (beam, ornaments, HUD, Pod, bar)
+#   yorha-watcher on|off|status bar          only the bar; the rest of the desktop stays
 # "off" also keeps a helper from starting at login; "on" re-enables and starts it.
 # Installed by deploy.sh to ~/.local/bin/yorha-watcher.
 set -euo pipefail
@@ -11,15 +10,13 @@ set -euo pipefail
 DOMAIN="gui/$(id -u)"
 AGENTS="$HOME/Library/LaunchAgents"
 
-APPEARANCE="com.yorha.appearance-watcher"
 DESKTOP="com.yorha.desktop"
-MINUTE="com.yorha.sketchybar-minute"
-BREW="$(command -v brew || echo /opt/homebrew/bin/brew)"
+# YoRHa Desktop skips the bar while this marker exists. It reads it at launch.
+BAR_OFF="$HOME/.config/yorha/bar-off"
 
 loaded() { launchctl print "$DOMAIN/$1" >/dev/null 2>&1; }
 disabled() { launchctl print-disabled "$DOMAIN" | grep -q "\"$1\" => disabled"; }
 desktop_running() { pgrep -f "\.config/yorha/bin/yorha-desktop" >/dev/null; }
-bar_running() { pgrep -x sketchybar >/dev/null; }
 
 wait_until() {
   for _ in 1 2 3 4 5 6 7 8 9 10; do
@@ -37,22 +34,6 @@ agent_on() {
 agent_off() {
   launchctl disable "$DOMAIN/$1"
   launchctl bootout "$DOMAIN/$1" 2>/dev/null || true
-}
-
-# --- appearance --------------------------------------------------------------
-appearance_status() {
-  if loaded "$APPEARANCE"; then echo "appearance: ON"; else echo "appearance: OFF"; fi
-}
-
-appearance_on() {
-  agent_on "$APPEARANCE"
-  loaded "$APPEARANCE" || launchctl kickstart -k "$DOMAIN/$APPEARANCE"
-}
-
-appearance_off() {
-  agent_off "$APPEARANCE"
-  # bootout returns before launchd finishes unloading; wait briefly.
-  wait_until bash -c "! launchctl print '$DOMAIN/$APPEARANCE' >/dev/null 2>&1"
 }
 
 # --- desktop -----------------------------------------------------------------
@@ -74,30 +55,33 @@ desktop_off() {
   wait_until bash -c '! pgrep -f "\.config/yorha/bin/yorha-desktop" >/dev/null'
 }
 
-# --- sketchybar --------------------------------------------------------------
-sketchybar_status() {
-  local clock="ON" bar="not running"
-  disabled "$MINUTE" && clock="OFF"
-  bar_running && bar="running"
-  echo "sketchybar: bar $bar, minute clock $clock"
+# --- bar ---------------------------------------------------------------------
+bar_status() {
+  if [ -e "$BAR_OFF" ]; then echo "bar: OFF"; else echo "bar: ON"; fi
 }
 
-sketchybar_on() {
-  # brew services registers the bar to start at login as well.
-  "$BREW" services start sketchybar >/dev/null
-  wait_until bar_running
-  agent_on "$MINUTE"
+# A running desktop picks the change up on restart; a stopped one at its next start.
+restart_desktop() {
+  loaded "$DESKTOP" || return 0
+  launchctl kickstart -k "$DOMAIN/$DESKTOP"
+  wait_until desktop_running
 }
 
-sketchybar_off() {
-  agent_off "$MINUTE"
-  # brew services stop also removes its login LaunchAgent.
-  "$BREW" services stop sketchybar >/dev/null 2>&1 || true
-  wait_until bash -c '! pgrep -x sketchybar >/dev/null'
+bar_on() {
+  [ -e "$BAR_OFF" ] || return 0
+  rm -f "$BAR_OFF"
+  restart_desktop
+}
+
+bar_off() {
+  [ ! -e "$BAR_OFF" ] || return 0
+  mkdir -p "$(dirname "$BAR_OFF")"
+  : > "$BAR_OFF"
+  restart_desktop
 }
 
 usage() {
-  echo "usage: yorha-watcher on|off|status [appearance|desktop|sketchybar]" >&2
+  echo "usage: yorha-watcher on|off|status [desktop|bar]" >&2
   exit 64
 }
 
@@ -105,9 +89,10 @@ action="${1:-status}"
 target="${2:-all}"
 case "$action" in on | off | status) ;; *) usage ;; esac
 case "$target" in
-  # The bar starts first so the appearance watcher's first apply has a bar to colour.
-  all) targets="sketchybar desktop appearance" ;;
-  appearance | desktop | sketchybar) targets="$target" ;;
+  # Each order costs at most one desktop restart: "on" clears the bar marker before
+  # the desktop starts, "off" stops the desktop before leaving the marker.
+  all) if [ "$action" = off ]; then targets="desktop bar"; else targets="bar desktop"; fi ;;
+  desktop | bar) targets="$target" ;;
   *) usage ;;
 esac
 

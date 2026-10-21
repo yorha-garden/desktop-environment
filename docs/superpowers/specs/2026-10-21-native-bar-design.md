@@ -78,12 +78,30 @@ Findings while matching SketchyBar:
 | Physical footprint | 11 MB | 11 MB | 12 MB |
 | CPU over the same 60 s | 0.15 s | 0.32 s | 0.01 s, plus the minute trigger's launches (switched off during this sample) |
 
-## Phase 2 (next)
+## Phase 2 results (2026-10-21)
 
-- A bar switch: `yorha-watcher on|off bar` writes a preference and restarts the
-  desktop agent, and the app skips the bar when it is off.
-- Retire SketchyBar (`brew services`), `com.yorha.sketchybar-minute`, the appearance
-  watcher, `apply-appearance.sh`, their plists, and their tests. The wallpaper HEIC
-  install shares the "appearance runtime" block in `deploy.sh` and stays.
-- `yorha-watcher` targets, backup and restore scripts, README, DECISIONS, and the
-  deployment contract tests.
+- **Bar switch.** `yorha-watcher on|off bar` adds or removes `~/.config/yorha/bar-off`
+  and restarts a running desktop agent; the app reads the marker at launch (from
+  `HOME`, so tests can sandbox it). A marker file was chosen over `defaults`
+  because tests cannot sandbox the user's preferences. `yorha-watcher on|off` with
+  no target orders the two so it costs at most one restart. The `sketchybar` and
+  `appearance` targets are gone.
+- **Retirement.** `install-desktop.sh` stops the SketchyBar brew service, boots out
+  and removes `com.yorha.sketchybar-minute` and `com.yorha.appearance-watcher`, and
+  deletes the watcher binary, the coordinator, their logs, and the crest PNGs, mode
+  marker, and lock in the appearance tree. The HEIC stays. The SketchyBar formula
+  and `~/.config/sketchybar` stay too; backup/restore owns that path.
+- **Deploy.** The appearance block installs and assigns only the HEIC. It keeps its
+  trap handling, which still guards the HEIC's pending temp and restores the
+  caller's traps; the sandbox tests now pause and fail at the HEIC copy instead of
+  the watcher compile. Deploy no longer needs SketchyBar installed.
+- **Backup and restore.** Snapshots no longer capture the watcher plist or its
+  loaded state. Restore no longer brings the watcher back; it removes it and the
+  minute trigger, along with YoRHa Desktop, its bar marker, and the appearance tree.
+- **Removed:** `config/sketchybar/sketchybarrc`, `bin/apply-appearance.sh`,
+  `bin/appearance-watcher.swift`, both plists, `assets/yorha-icon.png`, and the
+  watcher and coordinator test suites.
+
+The suite went from 81 tests to 44: the retired suites went with their code, and
+new tests cover the switch, the retirement, the HEIC-only deploy block, restore,
+and the app drawing no bar while the marker exists.

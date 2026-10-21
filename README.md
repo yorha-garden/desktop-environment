@@ -15,7 +15,7 @@ places macOS reads from (`~/.config/…`, `~/Library/Application Support/…`); 
 repo holds the authoritative copies plus the Gemini integration and the docs.
 
 ```
-bin/deploy.sh    repo  ->  live locations   (also loads three feature-owned LaunchAgents)
+bin/deploy.sh    repo  ->  live locations   (also loads two feature-owned LaunchAgents)
 bin/capture.sh   live  ->  repo             (run after editing something in place)
 ```
 
@@ -30,24 +30,21 @@ to see exactly what changed on the machine.
 |---|---|
 | `bin/pod-oracle.py` | Generates Pod messages via Gemini. Runs on a timer, never from the widget. |
 | `bin/deploy.sh` / `capture.sh` | Sync in each direction. |
-| `bin/yorha-backup.sh` | Snapshots every path the install touches and emits a tested `restore.sh`, including the prior appearance-watcher plist bytes and loaded state. |
-| `bin/yorha-watcher` | On/off switch for SketchyBar, YoRHa Desktop, and the appearance watcher. Deployed to `~/.local/bin`. |
-| `bin/build-desktop.sh` / `install-desktop.sh` | Compile YoRHa Desktop; install it under `~/.config/yorha/bin`, load its LaunchAgent, and retire Übersicht. `deploy.sh` calls the installer. |
-| `bin/apply-appearance.sh` | Idempotent SketchyBar coordinator: applies one validated palette/crest and records only successful modes. |
-| `bin/appearance-watcher.swift` | Native macOS appearance and wake observer, compiled by deployment into the runtime tree. |
+| `bin/yorha-backup.sh` | Snapshots every path the install touches and emits a tested `restore.sh`. |
+| `bin/yorha-watcher` | On/off switch for YoRHa Desktop, or only its bar. Deployed to `~/.local/bin`. |
+| `bin/build-desktop.sh` / `install-desktop.sh` | Compile YoRHa Desktop; install it under `~/.config/yorha/bin`, load its LaunchAgent, and retire Übersicht and SketchyBar. `deploy.sh` calls the installer. |
 | `bin/make-wallpaper.sh` | Verifies or assigns the committed dynamic HEIC; it never regenerates assets. |
 | `bin/yorha-system-wallpaper.swift` | Builds, inspects, and extracts the exact two-frame dynamic-HEIC contract. |
 | `bin/regenerate-system-wallpaper.sh` | Developer-only SVG rasterization and HEIC regeneration entry point. |
-| `native/YoRHaDesktop/` | **YoRHa Desktop**, the native desktop layer (Swift + Core Animation): scan beam, corner ornaments, HUD, and Pod panel in one process. Replaced the Übersicht widgets. |
+| `native/YoRHaDesktop/` | **YoRHa Desktop**, the native desktop layer (Swift + Core Animation): scan beam, corner ornaments, HUD, Pod panel, and the menu bar in one process. Replaced the Übersicht widgets and SketchyBar. |
 | `config/ghostty/` | Terminal config + the CRT shader. **Two** config files — see below. |
-| `config/sketchybar/` | Menu bar. Transparent — no fill, no border; items float on the wallpaper. |
 | `config/aerospace/` | Tiling config. Installed, `start-at-login = false`, currently not running by choice. |
 | `config/shell/` | Palette, zsh layer, Starship prompt, fastfetch, boot logo. |
 | `config/editor/` | VS Code–format colour theme. Install it yourself; nothing deploys into an editor. |
 | `assets/wallpaper.svg` / `wallpaper-dark.svg` | Developer SVG sources for the matching light and dark wallpaper frames. |
 | `assets/yorha-system.heic` | Committed two-frame 5120×2880 dynamic wallpaper; deployment copies and assigns it once, then macOS owns frame selection. |
-| `assets/yorha-icon-light.png` / `yorha-icon-dark.png` | Fixed-name SketchyBar crests copied into the appearance runtime tree. |
-| `launchd/` | The oracle timer, YoRHa Desktop, the appearance watcher, and the SketchyBar minute-boundary event. |
+| `assets/yorha-icon-light.png` / `yorha-icon-dark.png` | Bar crest sources. The dark one is embedded in the app (`BarCrest.swift`) and tinted per appearance; a test keeps them in sync. |
+| `launchd/` | The oracle timer and YoRHa Desktop. |
 | `docs/` | Architecture, palette, and the decision log. |
 
 ---
@@ -59,39 +56,27 @@ The macOS effective appearance owns the change. Deployment assigns one stable
 macOS choose the light or dark frame without a wallpaper script, process restart,
 or per-transition assignment. YoRHa Desktop follows the same system state by
 observing `NSApp.effectiveAppearance` and easing its palette over 200 ms, so
-widgets keep their state and animations instead of reloading.
+widgets and the bar keep their state and animations instead of reloading.
 
 ```text
 macOS effective appearance
    ├─ native wallpaper engine -> selects the HEIC frame
-   ├─ YoRHa Desktop           -> swaps its palette in place
-   └─ appearance-watcher      -> apply-appearance.sh -> live SketchyBar fields
+   └─ YoRHa Desktop           -> swaps its palette in place (widgets and bar)
 ```
 
-The dedicated `com.yorha.appearance-watcher` LaunchAgent observes appearance
-notifications, login, and wake, and launchd restarts it after a crash. The
-coordinator updates only SketchyBar text colors, wordmark color, and crest. A
-same-mode run is a no-op unless passed `--force`; failures do not advance the
-successful-mode marker, so startup, wake, or the next notification retries.
-
-Deployment manages three feature-owned LaunchAgents: the Pod oracle timer,
-YoRHa Desktop (`com.yorha.desktop`, plain `KeepAlive`), and the appearance
-watcher. The SketchyBar minute-boundary agent is deployed alongside them but
-belongs to the bar and stays outside the backup and restore contracts.
-Appearance runtime files are deliberately outside the TCC-protected repository:
+Deployment manages two feature-owned LaunchAgents: the Pod oracle timer and
+YoRHa Desktop (`com.yorha.desktop`, plain `KeepAlive`). The bar used to be
+SketchyBar, recoloured by a separate appearance watcher and coordinator and
+clocked by a launchd minute trigger; all three retired when the bar moved into
+YoRHa Desktop. The one appearance runtime file is deliberately outside the
+TCC-protected repository:
 
 ```text
-~/.config/yorha/bin/yorha-appearance-watcher
-~/.config/yorha/bin/apply-appearance.sh
 ~/.config/yorha/appearance/yorha-system.heic
-~/.config/yorha/appearance/yorha-icon-{light,dark}.png
-~/.config/yorha/appearance/{apply.lock,last-successful-mode}
-~/.config/yorha/logs/appearance.log
-~/Library/LaunchAgents/com.yorha.appearance-watcher.plist
 ```
 
-Ghostty remains permanently dark. Neither the watcher nor the coordinator reads,
-writes, reloads, or signals either Ghostty configuration or its running windows.
+Ghostty remains permanently dark. Nothing in the appearance system reads, writes,
+reloads, or signals either Ghostty configuration or its running windows.
 
 The committed HEIC is the deployment source. Asset regeneration is an explicit
 developer operation and requires Chrome:
@@ -177,43 +162,35 @@ against the XDG file will happily report success while the terminal ignores it.
 `deploy.sh` writes both.
 
 **To switch helpers off and keep them off across logins, use `yorha-watcher`.**
-`yorha-watcher off` stops SketchyBar (via `brew services`) and its minute clock,
-YoRHa Desktop, and the appearance watcher; `yorha-watcher on` reverses it. Name
-one helper to switch only that one: `yorha-watcher off sketchybar|desktop|appearance`.
-`yorha-watcher status` shows the current state. `deploy.sh` leaves a switched-off
-appearance watcher or desktop layer unloaded.
+`yorha-watcher off` stops YoRHa Desktop and keeps it off at login; `yorha-watcher on`
+reverses it. `yorha-watcher off bar` hides only the bar: it leaves
+`~/.config/yorha/bar-off` and restarts the desktop, which reads the marker at
+launch (the restart replays the desktop entrances). `yorha-watcher status` shows
+the current state. `deploy.sh` leaves a switched-off desktop layer unloaded.
 
-**`sketchybar --animate … --bar y_offset` silently no-ops after a reload.** The rc
-once parked the bar at `y_offset=-36` and relied on the entrance animation to slide
-it in; a reload dropped the animation and stranded the entire bar invisible
-off-screen. Visibility must never depend on an animation firing — the rc now ends
-with an unconditional `y_offset=0`, and the slide-in ceremony is scoped to first
-login via a `/tmp` sentinel.
+**Visibility must never depend on an animation firing.** SketchyBar once parked the
+bar off-screen and relied on a slide-in that a reload silently dropped, stranding
+the bar invisible. The native bar animates only its presentation; its model
+position is the resting one, so a dropped animation still leaves it on screen.
 
 **Assign the dynamic HEIC once and leave it to macOS.** Deployment copies the
 committed file to `~/.config/yorha/appearance/yorha-system.heic` and assigns that
 exact stable path to every desktop. macOS reads its `apple_desktop:apr` metadata
-and owns frame selection and transition timing. The appearance watcher and
-SketchyBar coordinator must never rewrite the HEIC, reassign it, select a frame,
-or restart `WallpaperAgent`.
+and owns frame selection and transition timing. Nothing else may rewrite the
+HEIC, reassign it, select a frame, or restart `WallpaperAgent`.
 
 **launchd jobs cannot run from this repository.** `~/Documents` is TCC-protected,
 and a correctly loaded plist can still fail with `Operation not permitted` when
-its executable lives here. Deployment therefore installs the watcher and
-coordinator under `~/.config/yorha/bin`, wallpaper and crests under
-`~/.config/yorha/appearance`, and logs under `~/.config/yorha/logs`.
+its executable lives here. Deployment therefore installs YoRHa Desktop and the
+oracle under `~/.config/yorha/bin`, the wallpaper under `~/.config/yorha/appearance`,
+and logs under `~/.config/yorha/logs`. The bar's crest is compiled into the binary
+for the same reason.
 
-**SketchyBar's query telemetry is not a visibility oracle.** After reloads,
-`bounding_rects` comes back empty and `--query displays` returns `[]` even while
-the bar is rendering perfectly on screen. Verify visibility with eyes or the
-window server, not with queries — half an hour was once spent "fixing" a bar that
-was never broken.
-
-**A relative SketchyBar `update_freq` does not align to wall-clock boundaries.**
-The clock once polled every 10 seconds and could trail the macOS menu-bar clock by
-the full 10 seconds. `com.yorha.sketchybar-minute` now uses launchd's calendar
-schedule to trigger `yorha_minute` at each system minute, with `system_woke` as an
-immediate catch-up event. There is no one-second polling loop.
+**A relative interval does not align to wall-clock minutes.** SketchyBar's clock
+once polled every 10 seconds and trailed the macOS clock by up to that much. The
+native bar arms a wall-clock deadline at each minute boundary, which also fires on
+time after a sleep, and redraws at once on display wake, clock change, and
+time-zone change.
 
 **`animation-fill-mode: both` on a reveal animation fails invisible.** If the
 animation never starts, the `from` state persists. The Pod's typewriter once left
@@ -233,7 +210,11 @@ so truncating the boot-time difference ran one minute behind.
 
 **Don't derive layout numbers — measure them.** The Pod panel is content-box, so
 its 300px width *is* the text area; "300 minus padding" was wrong and over-scrolled
-the marquee by 40px.
+the marquee by 40px. The sketchybarrc comment said the crest was centred in its
+slot; window captures showed SketchyBar drew it at the left edge.
+
+**A transform on the flipped root applies in the host's y-up space.** The bar's
+first entrance slid up from below. Animate a sublayer of the flipped root instead.
 
 ---
 
@@ -245,16 +226,19 @@ bash "$(cat ~/.config/yorha/BACKUP_PATH)/restore.sh"
 
 Points at an appearance-aware derived copy of the immutable pre-install baseline;
 the original captured baseline is never modified or deleted. Restore validates the
-recorded watcher state before changing anything, stages prior plist bytes beside
-their destination, removes only explicit installation-owned paths, restores the
-recorded wallpaper with an argv-bound path, restores both Ghostty configs and
-`~/.zshrc`, and derives uninstall advice from the captured package manifest. Copy,
-move, bootstrap, or state-integrity failures exit nonzero without printing false
-success. Verified against a copy under a temporary `HOME`, never the real session.
+recorded metadata before changing anything, removes only explicit
+installation-owned paths (including SketchyBar's minute trigger and the appearance
+watcher, if an older install left them), restores the recorded wallpaper with an
+argv-bound path, restores both Ghostty configs and `~/.zshrc`, and derives
+uninstall advice from the captured package manifest. Metadata failures exit
+nonzero before any change. Verified against a copy under a temporary `HOME`, never
+the real session.
 
 `restore.sh` scripts generated before YoRHa Desktop existed do not know about it.
 Turn it off first with `yorha-watcher off desktop`, then remove
 `~/Library/LaunchAgents/com.yorha.desktop.plist` and `~/.config/yorha/bin/yorha-desktop`.
+Scripts generated before the native bar also leave `~/.config/yorha/bar-off`
+behind if the bar was switched off; it is safe to delete.
 
 ---
 
@@ -263,9 +247,9 @@ Turn it off first with `yorha-watcher off desktop`, then remove
 Already installed on the build host:
 
 ```bash
-xcode-select --install   # swiftc builds YoRHa Desktop and the appearance watcher
+xcode-select --install   # swiftc builds YoRHa Desktop
 brew install --cask ghostty font-cascadia-code font-cascadia-code-nf
-brew tap FelixKratz/formulae && brew install sketchybar borders
+brew tap FelixKratz/formulae && brew install borders   # with AeroSpace
 brew install starship fastfetch jq
 brew install --cask nikitabobko/tap/aerospace   # optional; tiling is opt-in
 ```

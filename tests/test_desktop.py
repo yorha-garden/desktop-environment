@@ -134,15 +134,31 @@ class DesktopTests(unittest.TestCase):
         home, fake_bin, log = sandbox / "home with space", sandbox / "bin", sandbox / "calls.log"
         home.mkdir()
         fake_bin.mkdir()
-        old = home / "Library" / "LaunchAgents" / "com.yorha.ubersicht-watchdog.plist"
-        old.parent.mkdir(parents=True)
-        old.write_text("old")
+        agents = home / "Library" / "LaunchAgents"
+        agents.mkdir(parents=True)
+        yorha = home / ".config" / "yorha"
+        for leftover in (
+            agents / "com.yorha.ubersicht-watchdog.plist",
+            agents / "com.yorha.sketchybar-minute.plist",
+            agents / "com.yorha.appearance-watcher.plist",
+            yorha / "bin" / "yorha-appearance-watcher",
+            yorha / "bin" / "apply-appearance.sh",
+            yorha / "logs" / "appearance.log",
+            yorha / "appearance" / "yorha-icon-light.png",
+            yorha / "appearance" / "yorha-icon-dark.png",
+            yorha / "appearance" / "last-successful-mode",
+            yorha / "appearance" / "yorha-system.heic",
+        ):
+            leftover.parent.mkdir(parents=True, exist_ok=True)
+            leftover.write_text("old")
         disabled_line = '"com.yorha.desktop" => disabled' if disabled else ""
         for name, body in {
             "launchctl": f'echo "launchctl $*" >> "$CALLS"\n'
                          f'[ "$1" = print-disabled ] && echo \'{disabled_line}\'\n'
                          f'[ "$1" = print ] && exit 1\nexit 0\n',
             "osascript": 'echo "osascript $*" >> "$CALLS"\nexit 0\n',
+            "brew": 'echo "brew $*" >> "$CALLS"\nexit 0\n',
+            "pkill": 'echo "pkill $*" >> "$CALLS"\nexit 0\n',
         }.items():
             (fake_bin / name).write_text("#!/bin/bash\n" + body)
             (fake_bin / name).chmod(0o755)
@@ -166,12 +182,105 @@ class DesktopTests(unittest.TestCase):
         self.assertIn('quit app id "tracesOf.Uebersicht"', calls)
         self.assertIn("loaded", result.stdout)
 
+    def test_installer_retires_sketchybar_and_its_helpers(self):
+        result, home, calls = self.install_sandbox()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("brew services stop sketchybar", calls)
+        self.assertIn("pkill -x sketchybar", calls)
+        for label in ("com.yorha.sketchybar-minute", "com.yorha.appearance-watcher"):
+            self.assertIn(f"/{label}", calls)
+            self.assertFalse((home / f"Library/LaunchAgents/{label}.plist").exists(), label)
+        yorha = home / ".config/yorha"
+        for retired in ("bin/yorha-appearance-watcher", "bin/apply-appearance.sh", "logs/appearance.log"):
+            self.assertFalse((yorha / retired).exists(), retired)
+        # the appearance tree keeps only the wallpaper deploy.sh assigns
+        self.assertEqual([p.name for p in (yorha / "appearance").iterdir()], ["yorha-system.heic"])
+        self.assertIn("sketchybar -> retired", result.stdout)
+
     def test_installer_leaves_a_switched_off_layer_unloaded(self):
         result, home, calls = self.install_sandbox(disabled=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue((home / ".config/yorha/bin/yorha-desktop").exists())
         self.assertNotIn("launchctl bootstrap", calls)
         self.assertIn("switched off", result.stdout)
+
+    def watcher_sandbox(self, loaded):
+        sandbox = Path(tempfile.mkdtemp(dir=self.temp))
+        home, fake_bin, log = sandbox / "home", sandbox / "bin", sandbox / "calls.log"
+        state = sandbox / "desktop-loaded"
+        (home / "Library" / "LaunchAgents").mkdir(parents=True)
+        (home / "Library" / "LaunchAgents" / "com.yorha.desktop.plist").write_text("plist")
+        fake_bin.mkdir()
+        if loaded:
+            state.write_text("")
+        for name, body in {
+            # launchd with one job: loaded while the state file exists
+            "launchctl": 'echo "launchctl $*" >> "$CALLS"\n'
+                         'case "$1" in\n'
+                         '  print) [ -e "$STATE" ] ;;\n'
+                         '  print-disabled) [ ! -e "$STATE.disabled" ] || '
+                         'echo \'"com.yorha.desktop" => disabled\' ;;\n'
+                         '  enable) rm -f "$STATE.disabled" ;;\n'
+                         '  disable) : > "$STATE.disabled" ;;\n'
+                         '  bootout) rm -f "$STATE" ;;\n'
+                         '  bootstrap) : > "$STATE" ;;\n'
+                         'esac\n',
+            "pgrep": '[ -e "$STATE" ]\n',
+        }.items():
+            (fake_bin / name).write_text("#!/bin/bash\n" + body)
+            (fake_bin / name).chmod(0o755)
+        env = {**os.environ, "HOME": str(home), "CALLS": str(log), "STATE": str(state),
+               "PATH": f"{fake_bin}:/usr/bin:/bin"}
+
+        def run(*args):
+            result = subprocess.run([str(ROOT / "bin" / "yorha-watcher"), *args], env=env,
+                                    capture_output=True, text=True, timeout=30)
+            calls = log.read_text().splitlines() if log.exists() else []
+            log.unlink(missing_ok=True)
+            return result, calls
+        return run, home / ".config" / "yorha" / "bar-off"
+
+    def test_bar_switch_leaves_a_marker_and_restarts_a_running_desktop(self):
+        run, marker = self.watcher_sandbox(loaded=True)
+        result, calls = run("off", "bar")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(marker.exists())
+        self.assertEqual(result.stdout, "bar: OFF\n")
+        self.assertEqual(sum("kickstart -k" in c for c in calls), 1)
+        result, calls = run("off", "bar")   # already off: no second restart
+        self.assertFalse(any("kickstart" in c for c in calls))
+        result, calls = run("on", "bar")
+        self.assertFalse(marker.exists())
+        self.assertEqual(result.stdout, "bar: ON\n")
+        self.assertEqual(sum("kickstart -k" in c for c in calls), 1)
+
+    def test_bar_switch_does_not_start_a_stopped_desktop(self):
+        run, marker = self.watcher_sandbox(loaded=False)
+        result, calls = run("off", "bar")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(marker.exists())
+        self.assertFalse(any("kickstart" in c or "bootstrap" in c for c in calls))
+
+    def test_switching_everything_costs_at_most_one_restart(self):
+        run, marker = self.watcher_sandbox(loaded=True)
+        result, calls = run("off")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "desktop: OFF, not running\nbar: OFF\n")
+        self.assertTrue(marker.exists())
+        self.assertFalse(any("kickstart" in c for c in calls))
+        result, calls = run("on")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "bar: ON\ndesktop: ON, running\n")
+        self.assertFalse(marker.exists())
+        self.assertFalse(any("kickstart" in c for c in calls))
+        self.assertTrue(any("bootstrap" in c for c in calls))
+
+    def test_switch_no_longer_knows_the_retired_helpers(self):
+        run, _ = self.watcher_sandbox(loaded=True)
+        for target in ("sketchybar", "appearance"):
+            result, calls = run("off", target)
+            self.assertEqual(result.returncode, 64, target)
+            self.assertEqual(calls, [])
 
     def test_build_script_compiles_optimized_app_without_warnings(self):
         binary = self.temp / "yorha-desktop"
@@ -210,6 +319,26 @@ class DesktopTests(unittest.TestCase):
             # one 32 pt bar per screen, at SketchyBar's backstop-menu level
             bars = [l.split()[1] for l in lines if l.split()[:1] == ["-20"] and l.split()[2] == "32"]
             self.assertEqual(sorted(bars), sorted(screens))
+        finally:
+            process.terminate()
+            process.communicate(timeout=5)
+
+        # `yorha-watcher off bar`: the same app draws no bar while the marker exists
+        home = self.temp / "bar-off-home"
+        (home / ".config" / "yorha").mkdir(parents=True, exist_ok=True)
+        (home / ".config" / "yorha" / "bar-off").write_text("")
+        process = subprocess.Popen(
+            [str(binary), "--appearance", "dark"], env={**os.environ, "HOME": str(home)},
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        try:
+            time.sleep(1.5)
+            self.assertIsNone(process.poll(), process.stderr.read() if process.poll() else "")
+            lines = subprocess.run([str(windows), str(process.pid)], capture_output=True,
+                                   text=True, check=True).stdout.split("\n")
+            levels = [l.split()[0] for l in lines if l and not l.startswith("screen")]
+            self.assertTrue(levels)   # the desktop layer is still drawn
+            self.assertNotIn("-20", levels)
         finally:
             process.terminate()
             process.communicate(timeout=5)

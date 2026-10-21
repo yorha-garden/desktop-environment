@@ -6,7 +6,7 @@ inner.horizontal = 8
 inner.vertical = 8
 outer.left = 8
 outer.right = 8
-outer.top = 40   # sketchybar height 32 + 8 gap
+outer.top = 40   # YoRHa Desktop bar height 32 + 8 gap
 outer.bottom = 8
 
 [mode.main.binding]
