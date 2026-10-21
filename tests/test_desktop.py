@@ -1,3 +1,4 @@
+import base64
 import os
 import plistlib
 import subprocess
@@ -30,9 +31,43 @@ class DesktopTests(unittest.TestCase):
              "-o", str(binary)],
             check=True, capture_output=True, text=True,
         )
-        result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30)
+        result = subprocess.run([str(binary), str(ROOT)], capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("desktop tests passed", result.stdout)
+
+    def test_embedded_crest_is_the_dark_asset(self):
+        source = (ROOT / "native" / "YoRHaDesktop" / "BarCrest.swift").read_text()
+        encoded = source.split('"""')[1]
+        embedded = base64.b64decode("".join(encoded.split()))
+        self.assertEqual(embedded, (ROOT / "assets" / "yorha-icon-dark.png").read_bytes())
+
+    def test_bar_wording_matches_date_under_launchd(self):
+        probe_dir = self.temp / "bar-probe"
+        probe_dir.mkdir(exist_ok=True)
+        (probe_dir / "main.swift").write_text(
+            'import Foundation\n'
+            'let now = Date()\n'
+            'print(BarFormat.day(now), BarFormat.clock(now), separator: "|")\n'
+        )
+        binary = probe_dir / "probe"
+        library = [str(s) for s in SOURCES if s.name != "main.swift"]
+        subprocess.run(
+            ["swiftc", *library, str(probe_dir / "main.swift"), "-o", str(binary)],
+            check=True, capture_output=True, text=True,
+        )
+        # SketchyBar ran its `date` scripts under launchd, which sets no locale; a
+        # different user locale must not change the bar either.
+        env = {**os.environ, "LANG": "de_DE.UTF-8", "LC_ALL": "de_DE.UTF-8"}
+        for attempt in range(3):   # a minute boundary between the two readings is a retry
+            native = subprocess.run([str(binary)], capture_output=True, text=True, check=True,
+                                    env=env).stdout.strip()
+            shell = subprocess.run(
+                ["/bin/bash", "-c", "echo \"$(date '+%a %d %b' | tr '[:lower:]' '[:upper:]')|$(date '+%H.%M')\""],
+                capture_output=True, text=True, check=True, env={**os.environ, "LC_ALL": "C"},
+            ).stdout.strip()
+            if native == shell:
+                break
+        self.assertEqual(native, shell)
 
     def test_native_telemetry_matches_the_shell_tools_it_replaces(self):
         probe_dir = self.temp / "probe"
@@ -145,9 +180,22 @@ class DesktopTests(unittest.TestCase):
         self.assertNotIn("warning:", result.stderr)
         self.assertTrue(binary.exists())
 
-    def test_app_stays_running_until_terminated(self):
+    def test_app_stays_running_with_a_bar_at_sketchybar_level(self):
         binary = self.temp / "yorha-desktop-smoke"
         subprocess.run([str(BUILD), str(binary)], check=True, capture_output=True, text=True)
+        windows = self.temp / "windows"
+        (self.temp / "windows.swift").write_text(
+            'import AppKit\n'
+            'let pid = Int(CommandLine.arguments[1])!\n'
+            'let list = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as! [[String: Any]]\n'
+            'for w in list where w[kCGWindowOwnerPID as String] as? Int == pid {\n'
+            '    let b = w[kCGWindowBounds as String] as! [String: Any]\n'
+            '    print(w[kCGWindowLayer as String]!, b["Width"]!, b["Height"]!)\n'
+            '}\n'
+            'for s in NSScreen.screens { print("screen", Int(s.frame.width)) }\n'
+        )
+        subprocess.run(["swiftc", str(self.temp / "windows.swift"), "-o", str(windows)],
+                       check=True, capture_output=True, text=True)
         process = subprocess.Popen(
             [str(binary), "--appearance", "dark"],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
@@ -155,6 +203,13 @@ class DesktopTests(unittest.TestCase):
         try:
             time.sleep(1.5)
             self.assertIsNone(process.poll(), process.stderr.read() if process.poll() else "")
+            lines = subprocess.run([str(windows), str(process.pid)], capture_output=True,
+                                   text=True, check=True).stdout.split("\n")
+            screens = [l.split()[1] for l in lines if l.startswith("screen")]
+            self.assertTrue(screens)
+            # one 32 pt bar per screen, at SketchyBar's backstop-menu level
+            bars = [l.split()[1] for l in lines if l.split()[:1] == ["-20"] and l.split()[2] == "32"]
+            self.assertEqual(sorted(bars), sorted(screens))
         finally:
             process.terminate()
             process.communicate(timeout=5)

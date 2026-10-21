@@ -48,6 +48,8 @@ struct Palette: Equatable {
     // pod.jsx: --yorha-pod-border / --yorha-pod-rule
     let podBorder: RGBA
     let podRule: RGBA
+    // sketchybarrc BRAND: the bar's YoRHa wordmark and crest tint
+    let wordmark: RGBA
 
     static let light = Palette(
         field: RGBA(hex: 0xCAC5B0),
@@ -61,7 +63,8 @@ struct Palette: Equatable {
         beam: RGBA(74, 71, 65),
         beamSurface: RGBA(214, 210, 193),
         podBorder: RGBA(74, 71, 65, 0.45),
-        podRule: RGBA(74, 71, 65, 0.3)
+        podRule: RGBA(74, 71, 65, 0.3),
+        wordmark: RGBA(hex: 0x4A4741)
     )
 
     static let dark = Palette(
@@ -76,7 +79,8 @@ struct Palette: Equatable {
         beam: RGBA(110, 123, 139),
         beamSurface: RGBA(58, 58, 64),
         podBorder: RGBA(110, 123, 139, 0.45),
-        podRule: RGBA(110, 123, 139, 0.3)
+        podRule: RGBA(110, 123, 139, 0.3),
+        wordmark: RGBA(hex: 0xBC9A5A)
     )
 
     static func forMode(_ mode: Mode) -> Palette {
@@ -85,4 +89,17 @@ struct Palette: Equatable {
 
     // Every widget eased colour changes over 200 ms.
     static let transitionDuration: CFTimeInterval = 0.2
+
+    // One transaction for every layer that recolours, desktop and bar alike.
+    static func transition(animated: Bool, _ changes: () -> Void) {
+        CATransaction.begin()
+        if animated {
+            CATransaction.setAnimationDuration(transitionDuration)
+            CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeInEaseOut))
+        } else {
+            CATransaction.setDisableActions(true)
+        }
+        changes()
+        CATransaction.commit()
+    }
 }
