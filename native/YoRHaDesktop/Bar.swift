@@ -54,6 +54,17 @@ enum BarStyle {
     }
 }
 
+// `yorha-watcher off bar` leaves this marker and restarts the app, which then
+// draws the desktop layer without the bar. Read once at launch.
+enum BarSwitch {
+    static let marker = ".config/yorha/bar-off"
+
+    // launchd sets HOME for the agent; tests point it at a sandbox.
+    static func isOn(home: String = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()) -> Bool {
+        !FileManager.default.fileExists(atPath: (home as NSString).appendingPathComponent(marker))
+    }
+}
+
 // x of each item's box, in points from the screen's left edge
 struct BarLayout: Equatable {
     let crest: CGFloat

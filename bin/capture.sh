@@ -18,9 +18,6 @@ fi
 APPSUP="$HOME/Library/Application Support/com.mitchellh.ghostty/config.ghostty"
 [ -f "$APPSUP" ] && { cp "$APPSUP" "$REPO/config/ghostty/config.ghostty"; say "ghostty  <- Application Support override"; }
 
-[ -f "$HOME/.config/sketchybar/sketchybarrc" ] && \
-  { cp "$HOME/.config/sketchybar/sketchybarrc" "$REPO/config/sketchybar/"; say "sketchybar <- ~/.config/sketchybar"; }
-
 [ -f "$HOME/.config/aerospace/aerospace.toml" ] && \
   { cp "$HOME/.config/aerospace/aerospace.toml" "$REPO/config/aerospace/"; say "aerospace <- ~/.config/aerospace"; }
 

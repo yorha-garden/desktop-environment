@@ -25,7 +25,7 @@ needs 16 slots, and that is a different concern from the UI palette.
 
 ## Automatic appearance: native ownership, narrow coordination
 
-The wallpaper, YoRHa Desktop layer, and SketchyBar follow the effective macOS Light or
+The wallpaper and YoRHa Desktop (widgets and bar) follow the effective macOS Light or
 Dark appearance. Ghostty remains permanently dark. Its files, shader, palette,
 process, and windows are intentionally outside the appearance system; matching
 some dark desktop colors to Ghostty is visual coordination, not runtime coupling.
@@ -37,7 +37,7 @@ Light preserves the original parchment design:
 | Role | Value | Consumers |
 |---|---|---|
 | Field | `#CAC5B0` | Wallpaper base |
-| Text and ornament | `#4A4741` | Widgets, light crest, SketchyBar text and wordmark |
+| Text and ornament | `#4A4741` | Widgets, light crest, bar text and wordmark |
 | Raised surface | `#D6D2C1` | Translucent Pod panel |
 | Live signal | `#BC9A5A` | Linked state |
 | Alert | `#BB3B36` | Memory and battery warnings |
@@ -47,7 +47,7 @@ Dark uses the approved Terminal Native palette:
 | Role | Value | Consumers |
 |---|---|---|
 | Field | `#16161A` | Wallpaper base |
-| Text | `#D8D4C4` | Widgets and SketchyBar text |
+| Text | `#D8D4C4` | Widgets and bar text |
 | Bright value | `#EFEBDB` | Primary telemetry values |
 | Raised surface | `#3A3A40` | Translucent Pod panel |
 | Ornament | `#6E7B8B` | Wallpaper lattice, arcs, and scan beam |
@@ -73,33 +73,20 @@ contain no wallpaper behavior. The developer-only regeneration boundary is
 `bin/regenerate-system-wallpaper.sh --with-chrome`; deploy and runtime paths only
 inspect the committed asset and never start Chrome.
 
-### Dedicated watcher and coordinator
+### One process follows the appearance (watcher and coordinator retired)
 
-`com.yorha.appearance-watcher` is a compiled Swift LaunchAgent with `RunAtLoad`
-and `KeepAlive`. A native observer is used because scheduled Auto transitions are
-system events, not polling intervals, and because wake needs an immediate repair
-opportunity. It observes `AppleInterfaceThemeChangedNotification`, coalesces a
-burst for 150 ms, handles wake and startup immediately, resolves the final
-effective mode, and invokes the installed coordinator with exactly `light` or
-`dark`. Keeping this responsibility out of SketchyBar and the desktop layer gives
-one small, crash-recovered owner and avoids reloading either UI.
+Until 2026-10-21, `com.yorha.appearance-watcher`, a compiled Swift LaunchAgent,
+observed `AppleInterfaceThemeChangedNotification` and wake and ran
+`apply-appearance.sh`, which set SketchyBar's text colours, wordmark colour, and
+crest behind a lock and a last-successful-mode marker. That machinery existed only
+because the bar was a separate program. Once YoRHa Desktop drew the bar, the bar
+joined the app's own appearance observer, and the watcher, the coordinator, its
+lock protocol, and their tests were retired.
 
-The executables live under `~/.config/yorha/bin` and output is directed to
-`~/.config/yorha/logs/appearance.log`. They cannot reliably run from this
-TCC-protected repository under `~/Documents`, even when launchd successfully loads
-the plist.
-
-The committed feature owns exactly three feature-owned LaunchAgents: the Pod
-oracle, YoRHa Desktop, and appearance watcher. The SketchyBar minute-boundary
-agent is deployed alongside them but belongs to the bar, and stays outside the
-backup and restore contracts.
-
-`apply-appearance.sh` owns only live SketchyBar fields: clock/date text, YoRHa
-wordmark, and crest path. It serializes calls with `appearance/apply.lock` and
-writes `appearance/last-successful-mode` atomically only after SketchyBar succeeds.
-Repeating that mode is a no-op unless `--force` is supplied. A failed update leaves
-the prior marker untouched, so startup, wake, a manual reload, or the next system
-notification retries instead of falsely considering the mode applied.
+The committed feature now owns two feature-owned LaunchAgents: the Pod oracle and
+YoRHa Desktop. Their executables live under `~/.config/yorha/bin` because launchd
+jobs cannot reliably run from this TCC-protected repository under `~/Documents`,
+even when launchd successfully loads the plist.
 
 ### Palette swapped in place, no widget reload
 
@@ -107,8 +94,10 @@ YoRHa Desktop observes `NSApp.effectiveAppearance` and swaps its palette inside 
 200 ms Core Animation transaction. The tokens are the ones Übersicht's `theme.jsx`
 declared with `@media (prefers-color-scheme: dark)`, carried over verbatim into
 `Palette.swift`. Layers, telemetry cadence, and animation progress survive an
-appearance transition. A rebuild would replay entrance effects, so neither the
-watcher nor the coordinator signals the desktop layer.
+appearance transition. A rebuild would replay entrance effects, so nothing outside
+the app signals it on an appearance change. The bar recolours in the same
+transaction: its crest is one embedded mask tinted from `Palette.wordmark`, so it
+eases with the text instead of swapping images.
 
 ---
 
@@ -156,7 +145,8 @@ runtime around them.
 
 **Swift, not Rust.** The work is AppKit and Core Animation calls, which Swift
 makes directly and Rust would make through `objc2` bindings. The repo already
-compiles Swift for the appearance watcher, so no second toolchain was added.
+compiled Swift (for the appearance watcher, since retired), so no second toolchain
+was added. The bar followed the same reasoning.
 
 **No watchdog.** Übersicht could lose its widget server while the app stayed up,
 which launchd could not see. One native process has no such split state, so
@@ -171,6 +161,53 @@ which launchd could not see. One native process has no such split state, so
   second line and made the panel jump.
 - Reduced motion also stops the HUD boot-in and meter easing.
 - The Pod marquee distance uses the measured text width.
+
+---
+
+## Menu bar: YoRHa Desktop (native)
+
+On 2026-10-21 the bar moved from SketchyBar into YoRHa Desktop (`Bar.swift`).
+Design and captures: `docs/superpowers/specs/2026-10-21-native-bar-design.md`.
+
+**Why.** SketchyBar itself was native and small (~12 MB). The cost was around it: a
+launchd job firing every minute to trigger it, a ~13 MB appearance watcher, and a
+351-line coordinator with its own lock protocol, all to set four labels' colours
+and a crest. Inside YoRHa Desktop the bar reuses the app's appearance observer and
+adds no process.
+
+**Matched, not redesigned.** Window captures with both bars running showed zero
+alpha difference per item in light and dark. SketchyBar's quirks were kept: the
+crest sits at its slot's left edge, label boxes are sized by glyph ink (so the date
+can shift a point between minutes), and text draws with smoothing off. The window
+sits at SketchyBar's backstop-menu level, below app windows, on every Space but
+full-screen ones.
+
+**Clock.** A wall-clock deadline at each minute boundary replaces the launchd
+trigger; it fires on time after a sleep. Display wake, clock change, and time-zone
+change redraw at once. Wording is pinned to the C locale, as `date` printed it
+under launchd.
+
+**Switch.** `yorha-watcher off bar` leaves `~/.config/yorha/bar-off` and restarts
+the desktop agent; the app reads the marker at launch. A restart replays the
+desktop entrances, which is acceptable for a rare toggle and simpler than a live
+preference channel.
+
+---
+
+## Menu bar: SketchyBar (retired)
+
+Kept for the history; the rc, minute trigger, and coordinator are in git history.
+`install-desktop.sh` retires the service and YoRHa's helpers around it; the formula
+and `~/.config/sketchybar` stay, and backup/restore owns that path.
+
+- **`--animate … --bar y_offset` silently no-ops after a reload.** The rc once
+  parked the bar at `y_offset=-36` and relied on the slide-in, which stranded the
+  bar off-screen after a reload. Visibility must never depend on an animation.
+- **Query telemetry is not a visibility oracle.** After reloads, `bounding_rects`
+  came back empty while the bar rendered fine. Verify with the window server.
+- **A relative `update_freq` does not align to wall-clock minutes.** It trailed the
+  macOS clock by up to the poll interval, which is why the launchd minute trigger
+  existed at all.
 
 ---
 

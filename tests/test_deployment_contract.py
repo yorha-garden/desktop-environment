@@ -1,4 +1,4 @@
-import os, plistlib, re, signal, subprocess, tempfile, time, unittest
+import os, re, signal, subprocess, tempfile, time, unittest
 from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -36,13 +36,8 @@ class DeploymentContractTests(unittest.TestCase):
                        '"$YORHA_APPEARANCE_INSTALL_TEMPORARY"'),
             body.index('mv "$YORHA_APPEARANCE_INSTALL_TEMPORARY" '
                        '"$YORHA_APPEARANCE_INSTALL_DESTINATION"'))
-        for call in (
-            'install_atomic "$REPO/assets/yorha-system.heic" "$RUNTIME_WALLPAPER"',
-            'install_atomic "$REPO/assets/yorha-icon-light.png" "$APPEARANCE/yorha-icon-light.png"',
-            'install_atomic "$REPO/assets/yorha-icon-dark.png" "$APPEARANCE/yorha-icon-dark.png"',
-            'install_atomic "$REPO/bin/apply-appearance.sh" "$RUNTIME_COORDINATOR"',
-        ):
-            self.assertEqual(block.count(call), 1, call)
+        self.assertEqual(re.findall(r"^install_atomic .*$", block, re.M),
+                         ['install_atomic "$REPO/assets/yorha-system.heic" "$RUNTIME_WALLPAPER"'])
 
     def test_runtime_heic_is_assigned_exactly_once_with_argv(self):
         text = self.deploy_text()
@@ -54,84 +49,38 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertIn('POSIX file (item 1 of argv)', block)
         self.assertNotRegex(text, r'osascript[^\n]*\$REPO')
 
-    def test_watcher_plist_and_coordinator_install_contract(self):
+    def test_block_installs_only_the_wallpaper_and_guards_its_temp(self):
         block = self.appearance_block()
-        helper = re.search(r"install_atomic\(\) \{(?P<body>.*?)\n\}", block, re.S)
-        self.assertIsNotNone(helper)
-        body = helper.group("body")
-        self.assertLess(body.index('chmod +x "$YORHA_APPEARANCE_INSTALL_TEMPORARY"'),
-                        body.index('mv "$YORHA_APPEARANCE_INSTALL_TEMPORARY" '
-                                   '"$YORHA_APPEARANCE_INSTALL_DESTINATION"'))
-        self.assertIn('install_atomic "$REPO/bin/apply-appearance.sh" '
-                      '"$RUNTIME_COORDINATOR" executable', block)
-        self.assertRegex(block, r'swiftc -O .*appearance-watcher\.swift" -o "\$WATCHER_TMP"')
-        self.assertLess(block.index('swiftc -O '),
-                        block.index('mv "$WATCHER_TMP" "$RUNTIME_WATCHER"'))
+        for retired in ("swiftc", "launchctl", "plutil", "sketchybar", "apply-appearance",
+                        "appearance-watcher", "yorha-icon", "WATCHER_TMP", "PLIST_TMP"):
+            self.assertNotIn(retired, block)
         cleanup = re.search(r"cleanup_appearance_temps\(\) \{(?P<body>.*?)\n\}", block, re.S)
         self.assertIsNotNone(cleanup)
-        for pending in ("INSTALL_TMP", "WATCHER_TMP", "PLIST_TMP"):
-            self.assertIn(pending, cleanup.group("body"))
+        self.assertIn('rm -f -- "$INSTALL_TMP"', cleanup.group("body"))
         for event in ("EXIT", "HUP", "INT", "TERM"):
             self.assertRegex(block, rf"trap [^\n]+\b{event}\b")
-        self.assertEqual(block.count('launchctl bootstrap "gui/$(id -u)" "$APPEARANCE_PLIST"'), 1)
-        self.assertEqual(block.count('"$RUNTIME_COORDINATOR" "$MODE" --force'), 1)
-        self.assertIn('APPEARANCE_SKETCHYBAR_BIN="${SB_BIN:-}"', block)
-        self.assertIn('command -v sketchybar', block)
-        self.assertIn('[ ! -x "$APPEARANCE_SKETCHYBAR_BIN" ]', block)
+        self.assertLess(block.index('osascript - "$RUNTIME_WALLPAPER"'),
+                        block.index("restore_appearance_traps\n", block.index("osascript")))
 
-    def test_plist_rendering_is_argv_safe_linted_and_ordered(self):
-        block = self.appearance_block()
-        self.assertNotRegex(block, r"\bsed\b")
-        self.assertIn('-replace ProgramArguments -array', block)
-        for index in (0, 1):
-            self.assertIn(f'-insert ProgramArguments.{index} -string', block)
-        self.assertIn(
-            '-replace EnvironmentVariables.YORHA_SKETCHYBAR_BIN '
-            '-string "$APPEARANCE_SKETCHYBAR_BIN"',
-            block,
-        )
-        self.assertIn(
-            'YORHA_SKETCHYBAR_BIN="$APPEARANCE_SKETCHYBAR_BIN"',
-            block,
-        )
-        for key in ("StandardOutPath", "StandardErrorPath"):
-            self.assertIn(f'-replace {key} -string', block)
-        lint = block.index(' -lint "$PLIST_TMP"')
-        plist_move = block.index('mv "$PLIST_TMP" "$APPEARANCE_PLIST"')
-        assignment = block.index('osascript - "$RUNTIME_WALLPAPER"')
-        bootout = block.index('launchctl bootout "gui/$(id -u)/com.yorha.appearance-watcher"')
-        bootstrap = block.index('launchctl bootstrap "gui/$(id -u)" "$APPEARANCE_PLIST"')
-        coordinator = block.index('"$RUNTIME_COORDINATOR" "$MODE" --force')
-        self.assertLess(lint, plist_move)
-        self.assertLess(assignment, bootstrap)
-        self.assertLess(bootout, bootstrap)
-        self.assertLess(bootstrap, coordinator)
-        self.assertIn("|| say", block[coordinator:block.index("# ---", coordinator)
-                                      if "# ---" in block[coordinator:] else len(block)])
-
-    def test_bar_resolves_mode_before_defaults(self):
-        text = (ROOT / "config/sketchybar/sketchybarrc").read_text()
-        self.assertLess(text.index("AppleInterfaceStyle"), text.index("sketchybar --default"))
-        self.assertIn("apply-appearance.sh", text)
-
-    def test_plist_uses_runtime_paths(self):
-        raw = (ROOT / "launchd/com.yorha.appearance-watcher.plist").read_bytes()
-        data = plistlib.loads(raw.replace(b"HOME_PATH", b"/Users/test"))
-        self.assertTrue(data["RunAtLoad"] and data["KeepAlive"])
-        self.assertTrue(all("Documents" not in arg for arg in data["ProgramArguments"]))
+    def test_retired_bar_helpers_are_gone_and_the_installer_retires_them(self):
+        for path in ("config/sketchybar", "bin/apply-appearance.sh", "bin/appearance-watcher.swift",
+                     "launchd/com.yorha.appearance-watcher.plist",
+                     "launchd/com.yorha.sketchybar-minute.plist"):
+            self.assertFalse((ROOT / path).exists(), path)
+        deploy = self.deploy_text()
+        for retired in ("config/sketchybar", "sketchybar --", "sketchybar-minute",
+                        "appearance-watcher", "apply-appearance"):
+            self.assertNotIn(retired, deploy)
+        installer = (ROOT / "bin/install-desktop.sh").read_text()
+        self.assertIn('services stop sketchybar', installer)
+        self.assertIn("for OLD in com.yorha.sketchybar-minute com.yorha.appearance-watcher", installer)
+        watcher = (ROOT / "bin/yorha-watcher").read_text()
+        self.assertNotIn("brew", watcher)
+        self.assertIn("desktop | bar)", watcher)
 
     def test_pipeline_does_not_target_ghostty(self):
-        paths = [ROOT / "bin/apply-appearance.sh", ROOT / "bin/appearance-watcher.swift",
-                 ROOT / "launchd/com.yorha.appearance-watcher.plist",
-                 ROOT / "native/YoRHaDesktop/Palette.swift"]
+        paths = [ROOT / "native/YoRHaDesktop/Palette.swift", ROOT / "native/YoRHaDesktop/Bar.swift"]
         self.assertNotIn("ghostty", "\n".join(p.read_text().lower() for p in paths))
-
-    def test_watcher_and_coordinator_are_sketchybar_only(self):
-        text = "\n".join((ROOT / p).read_text().lower() for p in
-                         ("bin/apply-appearance.sh", "bin/appearance-watcher.swift"))
-        for forbidden in ("osascript", "wallpaperagent", "wallpaper_", "assets.env",
-                          "chrome", "regenerate-system-wallpaper", "übersicht", "ubersicht"):
-            self.assertNotIn(forbidden, text)
 
     def test_committed_feature_agent_scope_matches_tracked_plists_and_docs(self):
         tracked = subprocess.run(
@@ -139,13 +88,11 @@ class DeploymentContractTests(unittest.TestCase):
             check=True, text=True, capture_output=True,
         ).stdout.splitlines()
         tracked_names = {Path(path).name for path in tracked}
-        # Three feature-owned agents, plus SketchyBar's minute-boundary event, which
-        # is deployed alongside them but stays out of backup and restore.
+        # Two feature-owned agents. The appearance watcher and SketchyBar's minute
+        # trigger retired when YoRHa Desktop took over the bar.
         self.assertEqual(tracked_names, {
-            "com.yorha.appearance-watcher.plist",
             "com.yorha.pod-oracle.plist",
             "com.yorha.desktop.plist",
-            "com.yorha.sketchybar-minute.plist",
         })
 
         deploy_refs = set(re.findall(
@@ -153,8 +100,9 @@ class DeploymentContractTests(unittest.TestCase):
             self.deploy_text(),
         ))
         self.assertEqual(deploy_refs & tracked_names, tracked_names)
-        self.assertNotIn(
-            "sketchybar-minute",
+        # Restore clears the retired agents an older install may have left.
+        self.assertIn(
+            "for agent in com.yorha.sketchybar-minute com.yorha.appearance-watcher; do",
             (ROOT / "bin/yorha-backup.sh").read_text(),
         )
 
@@ -163,14 +111,11 @@ class DeploymentContractTests(unittest.TestCase):
                 ["git", "show", f":{path}"], cwd=ROOT,
                 check=True, text=True, capture_output=True,
             ).stdout.lower()
-            for path in (
-                "README.md", "docs/DECISIONS.md",
-                "docs/superpowers/plans/2026-08-05-system-appearance-theming.md",
-            )
+            for path in ("README.md", "docs/DECISIONS.md")
         }
         for path, text in committed_docs.items():
-            self.assertIn("three feature-owned", text, path)
-            self.assertNotRegex(text, r"four (?:user )?launchagents", path)
+            self.assertIn("two feature-owned", text, path)
+            self.assertNotRegex(text, r"(?:three|four) feature-owned", path)
 
 
 class DeploymentSandboxTests(unittest.TestCase):
@@ -181,13 +126,7 @@ class DeploymentSandboxTests(unittest.TestCase):
         self.fake_bin = self.base / "fake-bin"
         self.home.mkdir()
         self.fake_bin.mkdir()
-        self.sketchybar = self.base / "SketchyBar executable & live"
-        self.sketchybar.write_text(
-            "#!/bin/bash\n"
-            "printf '%s\n' \"$*\" >> \"$YORHA_TEST_SKETCHYBAR_LOG\"\n"
-        )
-        self.sketchybar.chmod(0o755)
-        self.sketchybar_log = self.base / "sketchybar.log"
+        self.osascript_log = self.base / "osascript.log"
         self.script = self.base / "appearance-runtime.sh"
         text = (ROOT / "bin/deploy.sh").read_text()
         block = text.split("# --- appearance runtime BEGIN", 1)[1].split(
@@ -195,7 +134,6 @@ class DeploymentSandboxTests(unittest.TestCase):
         self.block = block
         self.script.write_text(
             '#!/usr/bin/env bash\nset -euo pipefail\nREPO="$TEST_REPO"\n'
-            'SB_BIN="$YORHA_TEST_SKETCHYBAR_BIN"\n'
             "say() { printf '  %s\\n' \"$*\"; }\n" + block)
         self.script.chmod(0o755)
         self.env = os.environ.copy()
@@ -203,59 +141,30 @@ class DeploymentSandboxTests(unittest.TestCase):
             "HOME": str(self.home),
             "PATH": f"{self.fake_bin}:/usr/bin:/bin:/usr/sbin:/sbin",
             "TEST_REPO": str(ROOT),
-            "YORHA_PLUTIL": str(self.fake_bin / "plutil"),
             "YORHA_SIGNAL_READY": str(self.base / "signal-ready"),
             "YORHA_EXTRACT_READY": str(self.base / "extract-ready"),
             "YORHA_RESTORE_READY": str(self.base / "restore-ready"),
             "YORHA_HANDLER_READY": str(self.base / "handler-ready"),
             "YORHA_TRAP_LOG": str(self.base / "trap.log"),
-            "YORHA_TEST_SKETCHYBAR_BIN": str(self.sketchybar),
-            "YORHA_TEST_SKETCHYBAR_LOG": str(self.sketchybar_log),
-            "SB_BIN": str(self.sketchybar),
+            "YORHA_TEST_OSASCRIPT_LOG": str(self.osascript_log),
         })
         self.write_stub("cp", r'''#!/bin/bash
-if [ "${YORHA_DEPLOY_FAIL:-}" = cp ] && [[ "$1" == */assets/yorha-system.heic ]]; then
-  printf partial > "$2"
-  exit 91
+if [[ "$1" == */assets/yorha-system.heic ]]; then
+  case "${YORHA_DEPLOY_FAIL:-}" in
+    cp)
+      printf partial > "$2"
+      exit 91 ;;
+    signal)
+      printf partial > "$2"
+      : > "$YORHA_SIGNAL_READY"
+      while :; do sleep 1; done ;;
+  esac
 fi
 exec /bin/cp "$@"
 ''')
-        self.write_stub("chmod", r'''#!/bin/bash
-for target in "$@"; do :; done
-if [ "${YORHA_DEPLOY_FAIL:-}" = chmod ] && [[ "$target" == */apply-appearance.sh.tmp.* ]]; then
-  exit 92
-fi
-exec /bin/chmod "$@"
-''')
         self.write_stub("swift", "#!/bin/bash\nexit 0\n")
-        self.write_stub("swiftc", r'''#!/bin/bash
-output=
-while [ "$#" -gt 0 ]; do
-  if [ "$1" = -o ]; then
-    shift
-    output="$1"
-  fi
-  shift
-done
-if [ "${YORHA_DEPLOY_FAIL:-}" = compile ]; then
-  printf partial > "$output"
-  exit 93
-fi
-if [ "${YORHA_DEPLOY_FAIL:-}" = signal ]; then
-  printf partial > "$output"
-  : > "$YORHA_SIGNAL_READY"
-  while :; do sleep 1; done
-fi
-printf '#!/bin/bash\nexit 0\n' > "$output"
-''')
-        self.write_stub("plutil", r'''#!/bin/bash
-if [ "${YORHA_DEPLOY_FAIL:-}" = lint ] && [ "$1" = -lint ]; then
-  exit 94
-fi
-exec /usr/bin/plutil "$@"
-''')
-        self.write_stub("launchctl", "#!/bin/bash\nexit 0\n")
-        self.write_stub("osascript", "#!/bin/bash\nexit 0\n")
+        self.write_stub("osascript",
+                        "#!/bin/bash\nprintf '%s\\n' \"$*\" >> \"$YORHA_TEST_OSASCRIPT_LOG\"\n")
 
     def tearDown(self):
         self.temporary.cleanup()
@@ -393,7 +302,7 @@ eval() {
       ;;
   esac
   builtin eval "$@"
-  if [ "$YORHA_TEST_TERM_EVAL_COUNT" -eq 1 ] && [ -n "$WATCHER_TMP" ]; then
+  if [ "$YORHA_TEST_TERM_EVAL_COUNT" -eq 1 ] && [ -n "$INSTALL_TMP" ]; then
     YORHA_TEST_TERM_EVAL_COUNT=2
     : > "$YORHA_RESTORE_READY"
     while :; do sleep 1; done
@@ -432,7 +341,7 @@ printf 'after-block\n' >> "$YORHA_TRAP_LOG"
         deadline = time.monotonic() + 5
         while not ready.exists() and process.poll() is None and time.monotonic() < deadline:
             time.sleep(0.02)
-        self.assertTrue(ready.exists(), "sandbox did not reach watcher compilation")
+        self.assertTrue(ready.exists(), "sandbox did not reach the wallpaper copy")
         os.killpg(process.pid, signum)
         process.communicate(timeout=5)
         lines = trap_log.read_text().splitlines() if trap_log.exists() else []
@@ -473,7 +382,7 @@ printf 'after-block\n' >> "$YORHA_TRAP_LOG"
         while (not signal_ready.exists() and process.poll() is None
                and time.monotonic() < deadline):
             time.sleep(0.02)
-        self.assertTrue(signal_ready.exists(), "sandbox did not reach watcher compilation")
+        self.assertTrue(signal_ready.exists(), "sandbox did not reach the wallpaper copy")
         os.killpg(process.pid, entry_signum)
         deadline = time.monotonic() + 5
         while (not restore_ready.exists() and process.poll() is None
@@ -491,64 +400,33 @@ printf 'after-block\n' >> "$YORHA_TRAP_LOG"
         lines = trap_log.read_text().splitlines() if trap_log.exists() else []
         return process.returncode, lines
 
-    def test_special_home_renders_exact_parseable_runtime_plist(self):
+    def test_special_home_installs_and_assigns_the_committed_heic(self):
         result = self.run_block()
         self.assertEqual(result.returncode, 0, result.stderr)
-        plist_path = self.home / "Library/LaunchAgents/com.yorha.appearance-watcher.plist"
-        with plist_path.open("rb") as handle:
-            data = plistlib.load(handle)
-        runtime_bin = self.home / ".config/yorha/bin"
-        log = str(self.home / ".config/yorha/logs/appearance.log")
-        self.assertEqual(data["ProgramArguments"], [
-            str(runtime_bin / "yorha-appearance-watcher"),
-            str(runtime_bin / "apply-appearance.sh"),
-        ])
-        self.assertEqual(data["StandardOutPath"], log)
-        self.assertEqual(data["StandardErrorPath"], log)
-        self.assertEqual(
-            data["EnvironmentVariables"],
-            {"YORHA_SKETCHYBAR_BIN": str(self.sketchybar)},
-        )
-        self.assertTrue(self.sketchybar_log.is_file())
-        arguments = self.sketchybar_log.read_text().splitlines()
-        self.assertTrue(any("--set clock" in line for line in arguments), arguments)
-        self.assertFalse(any("--reload" in line for line in arguments), arguments)
+        runtime = self.home / ".config/yorha/appearance/yorha-system.heic"
+        self.assertEqual(runtime.read_bytes(), (ROOT / "assets/yorha-system.heic").read_bytes())
+        self.assertEqual(self.osascript_log.read_text().splitlines(), [f"- {runtime}"])
+        self.assertEqual(sorted(p.name for p in runtime.parent.iterdir()), ["yorha-system.heic"])
+        self.assertFalse((self.home / "Library/LaunchAgents").exists())
         self.assertEqual(self.pending_temps(), [])
 
-    def test_missing_sketchybar_stops_before_appearance_runtime_mutation(self):
-        env = self.env.copy()
-        env["YORHA_TEST_SKETCHYBAR_BIN"] = ""
-        result = subprocess.run(
-            ["/bin/bash", str(self.script)], cwd=ROOT, env=env,
-            text=True, capture_output=True, timeout=15,
-        )
-        self.assertEqual(result.returncode, 69)
-        self.assertIn("missing SketchyBar executable", result.stderr)
-        self.assertFalse((self.home / ".config/yorha/appearance").exists())
+    def test_copy_failure_preserves_the_installed_heic_and_removes_its_temp(self):
+        destination = self.home / ".config/yorha/appearance/yorha-system.heic"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text("prior-cp")
+        result = self.run_block("cp")
+        self.assertEqual(result.returncode, 91)
+        self.assertEqual(destination.read_text(), "prior-cp")
+        self.assertFalse(self.osascript_log.exists())
+        self.assertEqual(self.pending_temps(), [])
 
-    def test_failures_preserve_destinations_and_remove_pending_temps(self):
-        cases = (
-            ("cp", self.home / ".config/yorha/appearance/yorha-system.heic"),
-            ("chmod", self.home / ".config/yorha/bin/apply-appearance.sh"),
-            ("compile", self.home / ".config/yorha/bin/yorha-appearance-watcher"),
-            ("lint", self.home / "Library/LaunchAgents/com.yorha.appearance-watcher.plist"),
-        )
-        for failure, destination in cases:
-            with self.subTest(failure=failure):
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                destination.write_text(f"prior-{failure}")
-                result = self.run_block(failure)
-                self.assertNotEqual(result.returncode, 0)
-                self.assertEqual(destination.read_text(), f"prior-{failure}")
-                self.assertEqual(self.pending_temps(), [])
-
-    def test_signal_preserves_watcher_and_removes_pending_temp(self):
-        watcher = self.home / ".config/yorha/bin/yorha-appearance-watcher"
-        watcher.parent.mkdir(parents=True, exist_ok=True)
-        watcher.write_text("prior-signal")
+    def test_signal_preserves_the_installed_heic_and_removes_its_temp(self):
+        heic = self.home / ".config/yorha/appearance/yorha-system.heic"
+        heic.parent.mkdir(parents=True, exist_ok=True)
+        heic.write_text("prior-signal")
         returncode, _ = self.signal_block(self.script, signal.SIGTERM)
         self.assertEqual(returncode, -signal.SIGTERM)
-        self.assertEqual(watcher.read_text(), "prior-signal")
+        self.assertEqual(heic.read_text(), "prior-signal")
         self.assertEqual(self.pending_temps(), [])
 
     def test_normal_completion_restores_exact_prior_traps(self):
@@ -610,14 +488,13 @@ printf 'after-block\n' >> "$YORHA_TRAP_LOG"
         self.assertEqual(self.pending_temps(), [])
 
     def test_signal_cleans_then_dispatches_prior_handler_and_stops(self):
-        watcher = self.home / ".config/yorha/bin/yorha-appearance-watcher"
-        watcher.parent.mkdir(parents=True, exist_ok=True)
-        watcher.write_text("prior-chained-signal")
+        heic = self.home / ".config/yorha/appearance/yorha-system.heic"
+        heic.parent.mkdir(parents=True, exist_ok=True)
         cases = ((signal.SIGHUP, "hup"), (signal.SIGINT, "int"),
                  (signal.SIGTERM, "term"))
         for signum, name in cases:
             with self.subTest(signal=name):
-                watcher.write_text("prior-chained-signal")
+                heic.write_text("prior-chained-signal")
                 returncode, lines = self.signal_block(self.make_trap_script(), signum)
                 expected_status = 128 + signum
                 self.assertEqual(returncode, expected_status)
@@ -626,7 +503,7 @@ printf 'after-block\n' >> "$YORHA_TRAP_LOG"
                     f"prior-exit:{expected_status}:outer-handler",
                 ])
                 self.assertNotIn("after-block", lines)
-                self.assertEqual(watcher.read_text(), "prior-chained-signal")
+                self.assertEqual(heic.read_text(), "prior-chained-signal")
                 self.assertEqual(self.pending_temps(), [])
 
     def test_ignored_term_is_not_dispatched_and_does_not_continue(self):
@@ -650,8 +527,7 @@ class RestoreContractTests(unittest.TestCase):
         path.chmod(0o755)
         return path
 
-    def make_restore_sandbox(self, original_plist=b"pre-existing plist bytes\n",
-                             originally_loaded=True):
+    def make_restore_sandbox(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         sandbox = Path(temporary.name)
@@ -661,19 +537,11 @@ class RestoreContractTests(unittest.TestCase):
         (home / ".zshrc").write_text("baseline\n")
         agents = home / "Library/LaunchAgents"
         agents.mkdir(parents=True)
-        plist = agents / "com.yorha.appearance-watcher.plist"
-        if original_plist is not None:
-            plist.write_bytes(original_plist)
-
-        job_state = sandbox / "appearance-job-loaded"
-        if originally_loaded:
-            job_state.write_text("loaded\n")
         recorded_wallpaper = sandbox / "recorded.heic"
         recorded_wallpaper.write_bytes(b"baseline wallpaper")
         wallpaper_state = sandbox / "wallpaper-state"
         launchctl_log = sandbox / "launchctl-log"
         mutation_log = sandbox / "mutation-log"
-        failure_ready = sandbox / "failure-ready"
         env = os.environ.copy()
         env.update({
             "HOME": str(home),
@@ -682,8 +550,6 @@ class RestoreContractTests(unittest.TestCase):
             "YORHA_TEST_WALLPAPER_STATE": str(wallpaper_state),
             "YORHA_TEST_LAUNCHCTL_LOG": str(launchctl_log),
             "YORHA_TEST_MUTATION_LOG": str(mutation_log),
-            "YORHA_TEST_JOB_STATE": str(job_state),
-            "YORHA_TEST_FAILURE_READY": str(failure_ready),
         })
 
         self.write_double(fakebin, "osascript", r'''
@@ -699,43 +565,14 @@ exit 0
 ''')
         self.write_double(fakebin, "launchctl", r'''
 printf '%s\n' "$*" >> "$YORHA_TEST_LAUNCHCTL_LOG"
-case "$1:$2" in
-  print:*com.yorha.appearance-watcher)
-    [ -f "$YORHA_TEST_JOB_STATE" ]
-    exit $? ;;
-  bootout:*com.yorha.appearance-watcher)
-    /bin/rm -f "$YORHA_TEST_JOB_STATE"
-    exit 0 ;;
-  bootstrap:*)
-    case "$3" in
-      *com.yorha.appearance-watcher.plist)
-        if [ "${YORHA_TEST_RESTORE_FAILURE:-}" = bootstrap ]; then
-          exit 73
-        fi
-        : > "$YORHA_TEST_JOB_STATE"
-        exit 0 ;;
-    esac ;;
-esac
 exit 0
 ''')
         self.write_double(fakebin, "cp", r'''
 printf 'cp\t%s\n' "$*" >> "$YORHA_TEST_MUTATION_LOG"
-case "${YORHA_TEST_RESTORE_FAILURE:-}:$2" in
-  cp:*.restore.*)
-    printf partial > "$2"
-    exit 71 ;;
-  pause:*.restore.*)
-    printf partial > "$2"
-    : > "$YORHA_TEST_FAILURE_READY"
-    while :; do /bin/sleep 1; done ;;
-esac
 exec /bin/cp "$@"
 ''')
         self.write_double(fakebin, "mv", r'''
 printf 'mv\t%s\n' "$*" >> "$YORHA_TEST_MUTATION_LOG"
-case "${YORHA_TEST_RESTORE_FAILURE:-}:$1" in
-  mv:*.restore.*) exit 72 ;;
-esac
 exec /bin/mv "$@"
 ''')
         self.write_double(fakebin, "mkdir", r'''
@@ -760,31 +597,36 @@ exec /bin/rm "$@"
         self.assertTrue(restore.is_file())
         return {
             "sandbox": sandbox, "home": home, "agents": agents,
-            "plist": plist, "original_plist": original_plist,
-            "job_state": job_state, "recorded_wallpaper": recorded_wallpaper,
+            "recorded_wallpaper": recorded_wallpaper,
             "wallpaper_state": wallpaper_state, "launchctl_log": launchctl_log,
-            "mutation_log": mutation_log,
-            "failure_ready": failure_ready, "env": env,
+            "mutation_log": mutation_log, "env": env,
             "snapshot": snapshot, "restore": restore,
         }
 
-    def deploy_appearance_fixture(self, context):
+    def deploy_fixture(self, context):
         home = context["home"]
         yorha = home / ".config/yorha"
         yorha.mkdir(parents=True, exist_ok=True)
         keep = yorha / "keep.txt"
         keep.write_text("unrelated after snapshot\n")
-        context["plist"].write_text("deployed YoRHa plist\n")
-        context["job_state"].write_text("deployed job loaded\n")
         appearance = yorha / "appearance"
+        agents = context["agents"]
         runtime_paths = [
             appearance / "yorha-system.heic",
+            agents / "com.yorha.desktop.plist",
+            yorha / "bin/yorha-desktop",
+            yorha / "logs/yorha-desktop.log",
+            yorha / "bar-off",
+            # retired helpers an older install left behind
+            agents / "com.yorha.appearance-watcher.plist",
+            agents / "com.yorha.sketchybar-minute.plist",
             appearance / "yorha-icon-light.png",
             appearance / "yorha-icon-dark.png",
             appearance / "last-successful-mode",
             yorha / "bin/yorha-appearance-watcher",
             yorha / "bin/apply-appearance.sh",
             yorha / "logs/appearance.log",
+            yorha / "cache/sketchybar-minute.stderr.log",
         ]
         for path in runtime_paths:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -793,100 +635,34 @@ exec /bin/rm "$@"
         context.update({"keep": keep, "appearance": appearance,
                         "runtime_paths": runtime_paths})
 
-    def run_restore(self, context, failure=None):
-        env = context["env"].copy()
-        if failure:
-            env["YORHA_TEST_RESTORE_FAILURE"] = failure
-        return subprocess.run([str(context["restore"])], env=env,
+    def run_restore(self, context):
+        return subprocess.run([str(context["restore"])], env=context["env"],
                               text=True, capture_output=True)
-
-    def assert_no_plist_temps(self, context):
-        self.assertEqual(list(context["agents"].glob("*.restore.*")), [])
 
     def assert_runtime_removed(self, context):
         for path in context["runtime_paths"]:
             self.assertFalse(path.exists(), path)
-        self.assertFalse((context["appearance"] / "apply.lock").exists())
+        self.assertFalse(context["appearance"].exists())
         self.assertTrue(context["keep"].is_file())
 
-    def test_present_loaded_restores_exact_plist_and_job(self):
+    def test_restore_removes_owned_and_retired_paths_and_preserves_later_file(self):
         context = self.make_restore_sandbox()
-        self.deploy_appearance_fixture(context)
+        preexisting = (context["snapshot"] / "preexisting.txt").read_text().splitlines()
+        self.assertFalse(any(line.startswith(".config/yorha\t") for line in preexisting))
+        self.assertFalse(any("appearance-watcher" in p.name for p in context["snapshot"].iterdir()))
+        self.deploy_fixture(context)
         result = self.run_restore(context)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assert_runtime_removed(context)
-        self.assertEqual(context["plist"].read_bytes(), context["original_plist"])
-        self.assertTrue(context["job_state"].is_file())
         calls = context["launchctl_log"].read_text().splitlines()
-        self.assertTrue(any("bootout" in call for call in calls))
-        self.assertTrue(any("bootstrap" in call and str(context["plist"]) in call
-                            for call in calls))
+        for label in ("com.yorha.desktop", "com.yorha.appearance-watcher",
+                      "com.yorha.sketchybar-minute"):
+            self.assertTrue(any(call.startswith("bootout") and call.endswith(label)
+                                for call in calls), label)
+        self.assertFalse(any(call.startswith("bootstrap") for call in calls))
         self.assertEqual(context["wallpaper_state"].read_text().strip(),
                          str(context["recorded_wallpaper"]))
         self.assertIn("Restore complete.", result.stdout)
-        self.assert_no_plist_temps(context)
-
-    def test_present_unloaded_restores_plist_without_bootstrap(self):
-        context = self.make_restore_sandbox(originally_loaded=False)
-        self.deploy_appearance_fixture(context)
-        result = self.run_restore(context)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assert_runtime_removed(context)
-        self.assertEqual(context["plist"].read_bytes(), context["original_plist"])
-        self.assertFalse(context["job_state"].exists())
-        calls = context["launchctl_log"].read_text().splitlines()
-        self.assertFalse(any("bootstrap" in call for call in calls))
-        self.assert_no_plist_temps(context)
-
-    def test_absent_snapshot_removes_only_owned_paths_and_preserves_later_file(self):
-        context = self.make_restore_sandbox(original_plist=None, originally_loaded=False)
-        preexisting = (context["snapshot"] / "preexisting.txt").read_text().splitlines()
-        self.assertFalse(any(line.startswith(".config/yorha\t") for line in preexisting))
-        self.deploy_appearance_fixture(context)
-        result = self.run_restore(context)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assert_runtime_removed(context)
-        self.assertFalse(context["plist"].exists())
-        self.assertFalse(context["job_state"].exists())
-        self.assert_no_plist_temps(context)
-
-    def test_missing_or_corrupt_loaded_state_fails_before_mutation(self):
-        invalid_states = (
-            None,
-            b"corrupt\n",
-            b"loaded\ncorrupt\n",
-            b"corrupt\nloaded\n",
-            b"loaded\nloaded\n",
-            b"unloaded\ncorrupt\n",
-            b"corrupt\nunloaded\n",
-            b"unloaded\nunloaded\n",
-            b"loaded",
-            b"unloaded",
-            b"loaded \n",
-            b" unloaded\n",
-            b"unloaded\t\n",
-        )
-        for state in invalid_states:
-            with self.subTest(state=state):
-                context = self.make_restore_sandbox()
-                self.deploy_appearance_fixture(context)
-                state_path = context["snapshot"] / "appearance-watcher.loaded-state"
-                if state is None:
-                    state_path.unlink()
-                else:
-                    state_path.write_bytes(state)
-                result = self.run_restore(context)
-                self.assertEqual(result.returncode, 65)
-                self.assertEqual(context["plist"].read_text(), "deployed YoRHa plist\n")
-                self.assertTrue(context["job_state"].is_file())
-                self.assertTrue(all(path.exists() for path in context["runtime_paths"]))
-                calls = context["launchctl_log"].read_text().splitlines()
-                self.assertFalse(any("bootout" in call or "bootstrap" in call
-                                     for call in calls))
-                self.assertFalse(context["wallpaper_state"].exists())
-                self.assertIn("invalid appearance watcher state", result.stderr)
-                self.assertNotIn("Restore complete.", result.stdout)
-                self.assert_no_plist_temps(context)
 
     def test_plan_timeout_diagnostic_executes_valid_applescript(self):
         plan = (ROOT / "docs/superpowers/plans/2026-08-05-system-appearance-theming.md")
@@ -910,63 +686,6 @@ printf '1\n'
         self.assertEqual(result.stdout, "")
         self.assertEqual(result.stderr, "desktop count: 1\n")
 
-    def test_copy_failure_keeps_deployed_state_and_cleans_partial_temp(self):
-        context = self.make_restore_sandbox()
-        self.deploy_appearance_fixture(context)
-        result = self.run_restore(context, "cp")
-        self.assertEqual(result.returncode, 71)
-        self.assertEqual(context["plist"].read_text(), "deployed YoRHa plist\n")
-        self.assertTrue(context["job_state"].is_file())
-        self.assertTrue(all(path.exists() for path in context["runtime_paths"]))
-        self.assertNotIn("Restore complete.", result.stdout)
-        self.assert_no_plist_temps(context)
-
-    def test_move_failure_keeps_deployed_plist_but_stops_job_and_cleans_temp(self):
-        context = self.make_restore_sandbox()
-        self.deploy_appearance_fixture(context)
-        result = self.run_restore(context, "mv")
-        self.assertEqual(result.returncode, 72)
-        self.assertEqual(context["plist"].read_text(), "deployed YoRHa plist\n")
-        self.assertFalse(context["job_state"].exists())
-        self.assert_runtime_removed(context)
-        self.assertNotIn("Restore complete.", result.stdout)
-        self.assert_no_plist_temps(context)
-
-    def test_bootstrap_failure_restores_plist_but_reports_failure(self):
-        context = self.make_restore_sandbox()
-        self.deploy_appearance_fixture(context)
-        result = self.run_restore(context, "bootstrap")
-        self.assertEqual(result.returncode, 73)
-        self.assertEqual(context["plist"].read_bytes(), context["original_plist"])
-        self.assertFalse(context["job_state"].exists())
-        self.assert_runtime_removed(context)
-        self.assertNotIn("Restore complete.", result.stdout)
-        self.assert_no_plist_temps(context)
-
-    def test_signals_clean_partial_plist_temp_and_preserve_deployed_state(self):
-        for signum in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
-            with self.subTest(signal=signum):
-                context = self.make_restore_sandbox()
-                self.deploy_appearance_fixture(context)
-                env = context["env"].copy()
-                env["YORHA_TEST_RESTORE_FAILURE"] = "pause"
-                process = subprocess.Popen(
-                    [str(context["restore"])], env=env, text=True,
-                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                    start_new_session=True)
-                deadline = time.monotonic() + 5
-                while (not context["failure_ready"].exists()
-                       and process.poll() is None and time.monotonic() < deadline):
-                    time.sleep(0.02)
-                self.assertTrue(context["failure_ready"].exists())
-                os.killpg(process.pid, signum)
-                process.communicate(timeout=5)
-                self.assertEqual(process.returncode, 128 + signum)
-                self.assertEqual(context["plist"].read_text(), "deployed YoRHa plist\n")
-                self.assertTrue(context["job_state"].is_file())
-                self.assertTrue(all(path.exists() for path in context["runtime_paths"]))
-                self.assert_no_plist_temps(context)
-
     def test_corrupt_preexisting_metadata_fails_before_every_mutation(self):
         def corruptions(lines):
             return {
@@ -989,7 +708,7 @@ printf '1\n'
         ):
             with self.subTest(corruption=name):
                 context = self.make_restore_sandbox()
-                self.deploy_appearance_fixture(context)
+                self.deploy_fixture(context)
                 metadata = context["snapshot"] / "preexisting.txt"
                 lines = metadata.read_text().splitlines(keepends=True)
                 metadata.write_text("".join(corruptions(lines)[name]))
@@ -1013,7 +732,6 @@ printf '1\n'
                 }
                 self.assertEqual(result.returncode, 65, result.stderr)
                 self.assertEqual(after, before)
-                self.assertTrue(context["job_state"].is_file())
                 self.assertEqual(context["launchctl_log"].read_text(), "")
                 self.assertEqual(context["mutation_log"].read_text(), "")
                 self.assertFalse(context["wallpaper_state"].exists())
@@ -1024,5 +742,6 @@ printf '1\n'
         decisions = (ROOT / "docs/DECISIONS.md").read_text().lower()
         self.assertIn("automatic appearance", readme)
         self.assertIn("ghostty remains permanently dark", readme)
-        self.assertIn("appearance-watcher", decisions)
+        self.assertIn("watcher and coordinator retired", decisions)
         self.assertIn("prefers-color-scheme", decisions)
+        self.assertIn("yorha-watcher off bar", readme)
