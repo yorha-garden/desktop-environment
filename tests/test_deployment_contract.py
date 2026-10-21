@@ -48,6 +48,25 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertEqual(text.count('on run argv'), 1)
         self.assertIn('POSIX file (item 1 of argv)', block)
         self.assertNotRegex(text, r'osascript[^\n]*\$REPO')
+        # Setting the wallpaper replaces the user's choice, so only --wallpaper does it.
+        guard = block.index('if [ "${ASSIGN_WALLPAPER:-0}" = 1 ]; then')
+        self.assertLess(guard, block.index('osascript - "$RUNTIME_WALLPAPER"'))
+        self.assertLess(block.index("install_atomic \"$REPO/assets/yorha-system.heic\""), guard)
+
+    def test_wallpaper_opt_in_is_parsed_before_anything_is_deployed(self):
+        text = self.deploy_text()
+        parsing = text.index("ASSIGN_WALLPAPER=0\n")
+        self.assertIn("--wallpaper) ASSIGN_WALLPAPER=1 ;;", text)
+        self.assertLess(parsing, text.index("mkdir -p"))
+        with tempfile.TemporaryDirectory() as raw:
+            home = Path(raw) / "home"
+            home.mkdir()
+            result = subprocess.run([str(ROOT / "bin/deploy.sh"), "--bogus"],
+                                    env={**os.environ, "HOME": str(home)},
+                                    text=True, capture_output=True, timeout=15)
+            self.assertEqual(result.returncode, 64)
+            self.assertIn("usage:", result.stderr)
+            self.assertEqual(list(home.iterdir()), [])
 
     def test_block_installs_only_the_wallpaper_and_guards_its_temp(self):
         block = self.appearance_block()
@@ -400,14 +419,26 @@ printf 'after-block\n' >> "$YORHA_TRAP_LOG"
         lines = trap_log.read_text().splitlines() if trap_log.exists() else []
         return process.returncode, lines
 
-    def test_special_home_installs_and_assigns_the_committed_heic(self):
+    def test_special_home_installs_the_heic_and_keeps_the_current_wallpaper(self):
         result = self.run_block()
         self.assertEqual(result.returncode, 0, result.stderr)
         runtime = self.home / ".config/yorha/appearance/yorha-system.heic"
         self.assertEqual(runtime.read_bytes(), (ROOT / "assets/yorha-system.heic").read_bytes())
-        self.assertEqual(self.osascript_log.read_text().splitlines(), [f"- {runtime}"])
+        self.assertFalse(self.osascript_log.exists())
+        self.assertIn("current wallpaper kept", result.stdout)
         self.assertEqual(sorted(p.name for p in runtime.parent.iterdir()), ["yorha-system.heic"])
         self.assertFalse((self.home / "Library/LaunchAgents").exists())
+        self.assertEqual(self.pending_temps(), [])
+
+    def test_opt_in_sets_the_installed_heic_on_every_desktop_once(self):
+        env = {**self.env, "ASSIGN_WALLPAPER": "1"}
+        result = subprocess.run(["/bin/bash", str(self.script)], cwd=ROOT, env=env,
+                                text=True, capture_output=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        runtime = self.home / ".config/yorha/appearance/yorha-system.heic"
+        self.assertEqual(runtime.read_bytes(), (ROOT / "assets/yorha-system.heic").read_bytes())
+        self.assertEqual(self.osascript_log.read_text().splitlines(), [f"- {runtime}"])
+        self.assertIn("set on every desktop", result.stdout)
         self.assertEqual(self.pending_temps(), [])
 
     def test_copy_failure_preserves_the_installed_heic_and_removes_its_temp(self):

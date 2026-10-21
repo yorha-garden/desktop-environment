@@ -63,9 +63,11 @@ The wallpaper is a single committed `assets/yorha-system.heic`, rather than two
 runtime files selected by a script. The file contains exactly two 5120×2880
 frames: light at index 0 and dark at index 1. Frame 0 carries an
 `apple_desktop:apr` Image I/O metadata tag whose base64-encoded binary property
-list is exactly `{"l": 0, "d": 1}`. Deployment validates the contract, copies the
-HEIC to `~/.config/yorha/appearance/yorha-system.heic`, and assigns that path to
-every desktop once. macOS then owns frame choice and transition timing.
+list is exactly `{"l": 0, "d": 1}`. Deployment validates the contract and copies the
+HEIC to `~/.config/yorha/appearance/yorha-system.heic`. Assigning that path to every
+desktop is opt-in (`deploy.sh --wallpaper`), because it replaces whatever wallpaper
+is set; a plain deploy only refreshes the file. Once assigned, macOS owns frame
+choice and transition timing.
 
 This avoids wallpaper cache churn, stale repository paths, per-transition
 AppleScript, and `WallpaperAgent` restarts. The watcher and coordinator therefore

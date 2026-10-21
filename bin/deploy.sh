@@ -1,9 +1,19 @@
 #!/usr/bin/env bash
 # Push this repo's tracked configuration into the live locations macOS reads from.
 # The repo is the source of truth; the live paths are deployment targets.
+#   bin/deploy.sh [--wallpaper]   --wallpaper also sets the YoRHa wallpaper on every desktop
 #
-# Idempotent and additive. Does not touch ~/.zshrc, SIP, or any system setting.
+# Idempotent and additive. Does not touch ~/.zshrc, SIP, or any system setting,
+# and leaves the current wallpaper alone unless --wallpaper is given.
 set -euo pipefail
+
+ASSIGN_WALLPAPER=0
+for arg in "$@"; do
+  case "$arg" in
+    --wallpaper) ASSIGN_WALLPAPER=1 ;;
+    *) echo "usage: $0 [--wallpaper]" >&2; exit 64 ;;
+  esac
+done
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -131,12 +141,18 @@ install_atomic() {
 RUNTIME_WALLPAPER="$APPEARANCE/yorha-system.heic"
 install_atomic "$REPO/assets/yorha-system.heic" "$RUNTIME_WALLPAPER"
 
-osascript - "$RUNTIME_WALLPAPER" <<'AS'
+# Assigning replaces whatever wallpaper is set, so it happens only when asked.
+# Once assigned, macOS owns frame selection; later deploys only refresh the file.
+if [ "${ASSIGN_WALLPAPER:-0}" = 1 ]; then
+  osascript - "$RUNTIME_WALLPAPER" <<'AS'
 on run argv
   tell application "System Events" to set picture of every desktop to POSIX file (item 1 of argv)
 end run
 AS
-say "wallpaper -> ~/.config/yorha/appearance/yorha-system.heic (assigned once)"
+  say "wallpaper -> ~/.config/yorha/appearance/yorha-system.heic (set on every desktop)"
+else
+  say "wallpaper -> ~/.config/yorha/appearance/yorha-system.heic (installed; current wallpaper kept, --wallpaper sets it)"
+fi
 
 restore_appearance_traps
 # --- appearance runtime END

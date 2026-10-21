@@ -19,6 +19,9 @@ bin/deploy.sh    repo  ->  live locations   (also loads two feature-owned Launch
 bin/capture.sh   live  ->  repo             (run after editing something in place)
 ```
 
+`deploy.sh` keeps whatever wallpaper you have set. Run `deploy.sh --wallpaper` to
+set the YoRHa wallpaper on every desktop as well.
+
 Edit here, run `deploy.sh`. Or edit in place, run `capture.sh`, then `git diff`
 to see exactly what changed on the machine.
 
@@ -29,7 +32,7 @@ to see exactly what changed on the machine.
 | Path | What it is |
 |---|---|
 | `bin/pod-oracle.py` | Generates Pod messages via Gemini. Runs on a timer, never from the widget. |
-| `bin/deploy.sh` / `capture.sh` | Sync in each direction. |
+| `bin/deploy.sh` / `capture.sh` | Sync in each direction. `deploy.sh --wallpaper` also sets the YoRHa wallpaper. |
 | `bin/yorha-backup.sh` | Snapshots every path the install touches and emits a tested `restore.sh`. |
 | `bin/yorha-watcher` | On/off switch for YoRHa Desktop, or only its bar. Deployed to `~/.local/bin`. |
 | `bin/build-desktop.sh` / `install-desktop.sh` | Compile YoRHa Desktop; install it under `~/.config/yorha/bin`, load its LaunchAgent, and retire Übersicht and SketchyBar. `deploy.sh` calls the installer. |
@@ -42,7 +45,7 @@ to see exactly what changed on the machine.
 | `config/shell/` | Palette, zsh layer, Starship prompt, fastfetch, boot logo. |
 | `config/editor/` | VS Code–format colour theme. Install it yourself; nothing deploys into an editor. |
 | `assets/wallpaper.svg` / `wallpaper-dark.svg` | Developer SVG sources for the matching light and dark wallpaper frames. |
-| `assets/yorha-system.heic` | Committed two-frame 5120×2880 dynamic wallpaper; deployment copies and assigns it once, then macOS owns frame selection. |
+| `assets/yorha-system.heic` | Committed two-frame 5120×2880 dynamic wallpaper; deployment installs it, `deploy.sh --wallpaper` sets it, then macOS owns frame selection. |
 | `assets/yorha-icon-light.png` / `yorha-icon-dark.png` | Bar crest sources. The dark one is embedded in the app (`BarCrest.swift`) and tinted per appearance; a test keeps them in sync. |
 | `launchd/` | The oracle timer and YoRHa Desktop. |
 | `docs/` | Architecture, palette, and the decision log. |
@@ -51,10 +54,11 @@ to see exactly what changed on the machine.
 
 ## Automatic appearance
 
-The macOS effective appearance owns the change. Deployment assigns one stable
-`yorha-system.heic` path to every desktop; its native appearance metadata lets
-macOS choose the light or dark frame without a wallpaper script, process restart,
-or per-transition assignment. YoRHa Desktop follows the same system state by
+The macOS effective appearance owns the change. Deployment installs one stable
+`yorha-system.heic` path, and `deploy.sh --wallpaper` sets it on every desktop; its
+native appearance metadata lets macOS choose the light or dark frame without a
+wallpaper script, process restart, or per-transition assignment. A plain deploy
+keeps whatever wallpaper is set. YoRHa Desktop follows the same system state by
 observing `NSApp.effectiveAppearance` and easing its palette over 200 ms, so
 widgets and the bar keep their state and animations instead of reloading.
 
@@ -174,9 +178,10 @@ the bar invisible. The native bar animates only its presentation; its model
 position is the resting one, so a dropped animation still leaves it on screen.
 
 **Assign the dynamic HEIC once and leave it to macOS.** Deployment copies the
-committed file to `~/.config/yorha/appearance/yorha-system.heic` and assigns that
-exact stable path to every desktop. macOS reads its `apple_desktop:apr` metadata
-and owns frame selection and transition timing. Nothing else may rewrite the
+committed file to `~/.config/yorha/appearance/yorha-system.heic`; `deploy.sh
+--wallpaper` assigns that exact stable path to every desktop. A plain deploy only
+refreshes the file, so a wallpaper you chose yourself survives it. macOS reads
+its `apple_desktop:apr` metadata and owns frame selection and transition timing. Nothing else may rewrite the
 HEIC, reassign it, select a frame, or restart `WallpaperAgent`.
 
 **launchd jobs cannot run from this repository.** `~/Documents` is TCC-protected,
